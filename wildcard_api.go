@@ -15,13 +15,25 @@ import (
 	"github.com/twinfer/gowild/internal/wildcard"
 )
 
+// ErrBadPattern indicates a pattern was malformed.
+var ErrBadPattern = wildcard.ErrBadPattern
+
 // Match returns true if the pattern matches the string s. It is the fastest
 // matching function in this package, optimized for performance by operating on bytes.
 //
 // This function is ideal for ASCII strings or when byte-wise comparison is
 // sufficient. It does NOT correctly handle multi-byte Unicode characters.
 // For Unicode-aware matching, use MatchByRune.
-func Match(pattern, s string) bool {
+//
+// It supports wildcards and character classes:
+//   - `*`: Matches any sequence of characters (including zero characters)
+//   - `?`: Matches any single character or zero characters (optional)
+//   - `.`: Matches any single character (required)
+//   - `[abc]`: Matches any character in the set (a, b, or c)
+//   - `[!abc]` or `[^abc]`: Matches any character not in the set
+//   - `[a-z]`: Matches any character in the range a to z
+//   - `\*`, `\?`, `\.`, `\[`: Matches the literal character
+func Match(pattern, s string) (bool, error) {
 	return wildcard.Match(pattern, s)
 }
 
@@ -33,14 +45,14 @@ func Match(pattern, s string) bool {
 // This function should be used when the input strings may contain non-ASCII
 // characters. Note that this correctness comes with a performance cost compared
 // to the byte-wise Match function, as it involves converting strings to rune slices.
-func MatchByRune(pattern, s string) bool {
+func MatchByRune(pattern, s string) (bool, error) {
 	return wildcard.Match([]rune(pattern), []rune(s))
 }
 
 // MatchFromByte returns true if the pattern matches the byte slice s.
 // It is functionally equivalent to Match but operates directly on byte slices,
 // which can prevent string-to-slice conversion allocations in performance-sensitive code.
-func MatchFromByte(pattern, s []byte) bool {
+func MatchFromByte(pattern, s []byte) (bool, error) {
 	return wildcard.Match(pattern, s)
 }
 
@@ -50,7 +62,7 @@ func MatchFromByte(pattern, s []byte) bool {
 // Like Match, this function operates on bytes and does not correctly handle
 // multi-byte Unicode characters. For case-insensitive Unicode matching, use
 // MatchFoldRune.
-func MatchFold(pattern, s string) bool {
+func MatchFold(pattern, s string) (bool, error) {
 	return wildcard.MatchFold(pattern, s)
 }
 
@@ -60,12 +72,12 @@ func MatchFold(pattern, s string) bool {
 // It combines the case-folding logic of MatchFold with the rune-wise matching
 // of MatchByRune. It is the most correct but also the most computationally
 // expensive matching function in this package.
-func MatchFoldRune(pattern, s string) bool {
+func MatchFoldRune(pattern, s string) (bool, error) {
 	return wildcard.MatchFold([]rune(pattern), []rune(s))
 }
 
 // MatchFoldByte returns true if the pattern matches the byte slice s with
 // case-insensitivity. It is the byte-slice equivalent of MatchFold.
-func MatchFoldByte(pattern, s []byte) bool {
+func MatchFoldByte(pattern, s []byte) (bool, error) {
 	return wildcard.MatchFold(pattern, s)
 }
