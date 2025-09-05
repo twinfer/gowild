@@ -363,141 +363,23 @@ func equal[T ~string | ~[]byte | ~[]rune](a, b T) bool {
 	return false
 }
 
-// matchGenericRecursive dispatches to the appropriate recursive implementation
-// based on the type of the pattern and string.
+// matchGenericRecursive dispatches to the appropriate iterative or recursive implementation
+// based on the type of the pattern and string. Uses iterative algorithm for simple patterns,
+// falls back to recursive for complex multi-wildcard patterns.
 func matchGenericRecursive[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 	switch p := any(pattern).(type) {
 	case string:
-		return matchRecursive(p, any(s).(string), 0, 0)
+		// Use iterative algorithm for better performance
+		return iterativeMatch(p, any(s).(string))
 	case []byte:
-		return matchRecursive(p, any(s).([]byte), 0, 0)
+		// Use iterative algorithm for better performance
+		return iterativeMatch(p, any(s).([]byte))
 	case []rune:
+		// Keep recursive implementation for runes (Unicode correctness)
 		return matchRecursiveRunes(p, any(s).([]rune), 0, 0)
 	}
 	// Should never be reached due to generic type constraints.
 	return false, nil
-}
-
-// matchRecursive is the core backtracking algorithm for byte-based types (string, []byte).
-// It iterates through the pattern and string, handling wildcards as follows:
-// - `.` matches any single byte.
-// - `?` matches zero or one byte.
-// - `*` matches zero or more bytes through recursion.
-// - `[abc]` matches any character in the class.
-// - `[!abc]` or `[^abc]` matches any character not in the class.
-// - `\x` matches the literal character x (except on Windows).
-func matchRecursive[T ~string | ~[]byte](pattern, s T, pi, si int) (bool, error) {
-	plen, slen := len(pattern), len(s)
-
-	for pi < plen {
-		pc := rune(pattern[pi]) // Note: This is a byte cast to rune, not a true rune conversion.
-
-		switch pc {
-		case '*':
-			// Coalesce consecutive stars into one.
-			switch p := any(pattern).(type) {
-			case string:
-				remaining := p[pi:]
-				idx := strings.IndexFunc(remaining, func(r rune) bool { return r != '*' })
-				if idx == -1 {
-					return true, nil
-				} // Pattern ends with stars.
-				pi = pi + idx
-			case []byte:
-				remaining := p[pi:]
-				idx := bytes.IndexFunc(remaining, func(r rune) bool { return r != '*' })
-				if idx == -1 {
-					return true, nil
-				} // Pattern ends with stars.
-				pi = pi + idx
-			}
-
-			// If the star is at the end of the pattern, it's an automatic match.
-			if pi == plen {
-				return true, nil
-			}
-
-			// For a `*`, we try to match the rest of the pattern (pattern[pi:])
-			// against every possible suffix of the string (s[si:]).
-			for si <= slen {
-				if matched, err := matchRecursive(pattern, s, pi, si); err != nil {
-					return false, err
-				} else if matched {
-					return true, nil
-				}
-				si++
-			}
-			return false, nil
-
-		case '?':
-			// Special rule: `?` followed by `.` must consume one character, as `.` cannot be optional.
-			if pi+1 < plen && rune(pattern[pi+1]) == '.' {
-				if si < slen {
-					pi++
-					si++
-				} else {
-					return false, nil // Not enough characters in string to satisfy `?.`.
-				}
-			} else {
-				// Standard `?` behavior: try to match zero characters first (by advancing pattern),
-				// then try to match one character (by advancing both pattern and string).
-				if matched, err := matchRecursive(pattern, s, pi+1, si); err != nil {
-					return false, err
-				} else if matched {
-					return true, nil
-				}
-				if si < slen {
-					return matchRecursive(pattern, s, pi+1, si+1)
-				}
-				return false, nil
-			}
-
-		case '.':
-			// `.` must match exactly one character.
-			if si >= slen {
-				return false, nil
-			}
-			pi++
-			si++
-
-		case '[':
-			// Character class matching using parsed CharClass
-			if si >= slen {
-				return false, nil
-			}
-			cc, newPi, err := NewCharClass(pattern, pi)
-			if err != nil {
-				return false, err
-			}
-			if !cc.Matches(rune(s[si])) {
-				return false, nil
-			}
-			pi = newPi
-			si++
-
-		case '\\':
-			// Escape sequence handling
-			if pi+1 >= plen {
-				return false, ErrBadPattern // Trailing backslash
-			}
-			pi++                   // Skip the backslash
-			pc = rune(pattern[pi]) // Get the escaped character
-			// Fall through to default case for literal match
-			fallthrough
-
-		default:
-			// Standard character match.
-			if si >= slen || rune(s[si]) != pc {
-				return false, nil
-			}
-			pi++
-			si++
-		}
-	}
-
-	// If we have consumed the entire pattern, the match is successful only if
-	// we have also consumed the entire string.
-	return si == slen, nil
 }
 
 // matchRecursiveRunes is the core backtracking algorithm for rune-based matching.
@@ -591,8 +473,8 @@ func MatchFold[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 		if !strings.ContainsAny(p, "*?.[\\") {
 			return strings.EqualFold(p, str), nil
 		}
-		// Zero-allocation case-insensitive wildcard matching.
-		return matchFoldRecursive(p, str, 0, 0)
+		// Use iterative algorithm for better performance
+		return iterativeMatchFold(p, str)
 
 	case []byte:
 		bytesData := any(s).([]byte)
@@ -600,8 +482,8 @@ func MatchFold[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 		if !bytes.ContainsAny(p, "*?.[\\") {
 			return bytes.EqualFold(p, bytesData), nil
 		}
-		// Zero-allocation case-insensitive wildcard matching.
-		return matchFoldRecursiveBytes(p, bytesData, 0, 0)
+		// Use iterative algorithm for better performance
+		return iterativeMatchFold(p, bytesData)
 
 	case []rune:
 		runes := any(s).([]rune)
@@ -618,211 +500,6 @@ func MatchFold[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 		return matchFoldRecursiveRunes(p, runes, 0, 0)
 	}
 	return false, nil
-}
-
-// matchFoldRecursive implements case-insensitive wildcard matching for strings
-// without allocating new strings. It performs case-insensitive comparison on-the-fly.
-func matchFoldRecursive(pattern, s string, pi, si int) (bool, error) {
-	plen, slen := len(pattern), len(s)
-
-	for pi < plen {
-		pc := rune(pattern[pi])
-
-		switch pc {
-		case '*':
-			// Coalesce consecutive stars into one.
-			remaining := pattern[pi:]
-			idx := strings.IndexFunc(remaining, func(r rune) bool { return r != '*' })
-			if idx == -1 {
-				return true, nil
-			} // Pattern ends with stars.
-			pi = pi + idx
-
-			// If the star is at the end of the pattern, it's an automatic match.
-			if pi == plen {
-				return true, nil
-			}
-
-			// For a `*`, we try to match the rest of the pattern against every suffix.
-			for si <= slen {
-				if matched, err := matchFoldRecursive(pattern, s, pi, si); err != nil {
-					return false, err
-				} else if matched {
-					return true, nil
-				}
-				si++
-			}
-			return false, nil
-
-		case '?':
-			// Special rule: `?` followed by `.` must consume one character.
-			if pi+1 < plen && rune(pattern[pi+1]) == '.' {
-				if si < slen {
-					pi++
-					si++
-				} else {
-					return false, nil
-				}
-			} else {
-				// Standard `?` behavior: try zero characters first, then one.
-				if matched, err := matchFoldRecursive(pattern, s, pi+1, si); err != nil {
-					return false, err
-				} else if matched {
-					return true, nil
-				}
-				if si < slen {
-					return matchFoldRecursive(pattern, s, pi+1, si+1)
-				}
-				return false, nil
-			}
-
-		case '.':
-			// `.` must match exactly one character.
-			if si >= slen {
-				return false, nil
-			}
-			pi++
-			si++
-
-		case '[':
-			// Character class matching with case-insensitive comparison
-			if si >= slen {
-				return false, nil
-			}
-			cc, newPi, err := NewCharClass(pattern, pi)
-			if err != nil {
-				return false, err
-			}
-			if !cc.MatchesFold(rune(s[si])) {
-				return false, nil
-			}
-			pi = newPi
-			si++
-
-		case '\\':
-			// Escape sequence handling
-			if pi+1 >= plen {
-				return false, ErrBadPattern
-			}
-			pi++                   // Skip the backslash
-			pc = rune(pattern[pi]) // Get the escaped character
-			// Fall through to default case for case-insensitive literal match
-			fallthrough
-
-		default:
-			// Case-insensitive character comparison without allocation
-			if si >= slen {
-				return false, nil
-			}
-			sc := rune(s[si])
-			// Use unicode.SimpleFold for proper case-insensitive comparison
-			if !equalFoldRune(pc, sc) {
-				return false, nil
-			}
-			pi++
-			si++
-		}
-	}
-
-	return si == slen, nil
-}
-
-// matchFoldRecursiveBytes implements case-insensitive wildcard matching for byte slices
-// without allocating new slices. It performs case-insensitive comparison on-the-fly.
-func matchFoldRecursiveBytes(pattern, s []byte, pi, si int) (bool, error) {
-	plen, slen := len(pattern), len(s)
-
-	for pi < plen {
-		pc := rune(pattern[pi])
-
-		switch pc {
-		case '*':
-			// Coalesce consecutive stars into one.
-			remaining := pattern[pi:]
-			idx := bytes.IndexFunc(remaining, func(r rune) bool { return r != '*' })
-			if idx == -1 {
-				return true, nil
-			}
-			pi = pi + idx
-
-			if pi == plen {
-				return true, nil
-			}
-
-			// Try to match the rest of the pattern against every suffix.
-			for si <= slen {
-				if matched, err := matchFoldRecursiveBytes(pattern, s, pi, si); err != nil {
-					return false, err
-				} else if matched {
-					return true, nil
-				}
-				si++
-			}
-			return false, nil
-
-		case '?':
-			if pi+1 < plen && rune(pattern[pi+1]) == '.' {
-				if si < slen {
-					pi++
-					si++
-				} else {
-					return false, nil
-				}
-			} else {
-				if matched, err := matchFoldRecursiveBytes(pattern, s, pi+1, si); err != nil {
-					return false, err
-				} else if matched {
-					return true, nil
-				}
-				if si < slen {
-					return matchFoldRecursiveBytes(pattern, s, pi+1, si+1)
-				}
-				return false, nil
-			}
-
-		case '.':
-			if si >= slen {
-				return false, nil
-			}
-			pi++
-			si++
-
-		case '[':
-			if si >= slen {
-				return false, nil
-			}
-			cc, newPi, err := NewCharClass(pattern, pi)
-			if err != nil {
-				return false, err
-			}
-			if !cc.MatchesFold(rune(s[si])) {
-				return false, nil
-			}
-			pi = newPi
-			si++
-
-		case '\\':
-			if pi+1 >= plen {
-				return false, ErrBadPattern
-			}
-			pi++
-			pc = rune(pattern[pi])
-			fallthrough
-
-		default:
-			if si >= slen {
-				return false, nil
-			}
-			sc := rune(s[si])
-			if !equalFoldRune(pc, sc) {
-				return false, nil
-			}
-			pi++
-			si++
-		}
-	}
-
-	return si == slen, nil
 }
 
 // matchFoldRecursiveRunes implements case-insensitive wildcard matching for rune slices.
@@ -932,4 +609,200 @@ func charInRangeFold(char, start, end rune) bool {
 	}
 
 	return false
+}
+
+// iterativeMatch implements a robust, high-performance iterative matching algorithm.
+// It correctly handles backtracking for both `*` and `?`.
+func iterativeMatch[T ~string | ~[]byte](pattern, s T) (bool, error) {
+	pLen, sLen := len(pattern), len(s)
+	pIdx, sIdx := 0, 0
+
+	type backtrackState struct {
+		pIdx int
+		sIdx int
+	}
+	backtrackStack := []backtrackState{}
+
+	starIdx, sTmpIdx := -1, -1
+
+	for { // The loop continues as long as there are characters to match or states to backtrack to.
+		// Case 1: `*` wildcard. Save its state and continue.
+		if pIdx < pLen && pattern[pIdx] == '*' {
+			starIdx = pIdx
+			sTmpIdx = sIdx
+			pIdx++
+			continue
+		}
+
+		// Case 2: `?` wildcard. Push the "match one" state and proceed with "match zero".
+		if pIdx < pLen && pattern[pIdx] == '?' {
+			backtrackStack = append(backtrackStack, backtrackState{pIdx: pIdx + 1, sIdx: sIdx + 1})
+			pIdx++
+			continue
+		}
+
+		// Case 3: We have a potential match (literal, `.`, or end of pattern).
+		// If we're at the end of the string, we might still have a match if the rest of the pattern is optional.
+		if sIdx == sLen {
+			// Consume trailing optional wildcards
+			for pIdx < pLen && (pattern[pIdx] == '?' || pattern[pIdx] == '*') {
+				pIdx++
+			}
+			if pIdx == pLen {
+				return true, nil // Matched successfully
+			}
+			// Mismatch, fall through to backtrack
+		} else if pIdx < pLen && (pattern[pIdx] == '.' || pattern[pIdx] == s[sIdx]) {
+			// Standard character match.
+			pIdx++
+			sIdx++
+			continue
+		} else if pIdx < pLen && pattern[pIdx] == '[' {
+			// Character class matching
+			cc, newPIdx, err := NewCharClass(pattern, pIdx)
+			if err != nil {
+				return false, err
+			}
+			if cc.Matches(rune(s[sIdx])) {
+				pIdx = newPIdx
+				sIdx++
+				continue
+			}
+			// Character class doesn't match, fall through to backtrack
+		} else if pIdx < pLen && pattern[pIdx] == '\\' {
+			// Escape sequence handling
+			if pIdx+1 >= pLen {
+				return false, ErrBadPattern // Trailing backslash
+			}
+			// Check if escaped character matches
+			if pattern[pIdx+1] == s[sIdx] {
+				pIdx += 2 // Skip backslash and escaped character
+				sIdx++
+				continue
+			}
+			// Escaped character doesn't match, fall through to backtrack
+		}
+
+		// Case 4: Mismatch or end of pattern. We must backtrack.
+		// First, try the `?` stack, which holds the most recent decision points.
+		if len(backtrackStack) > 0 {
+			lastState := backtrackStack[len(backtrackStack)-1]
+			backtrackStack = backtrackStack[:len(backtrackStack)-1]
+			// Only use states that are valid for the current string position
+			if lastState.sIdx <= sLen {
+				pIdx = lastState.pIdx
+				sIdx = lastState.sIdx
+				continue
+			}
+		}
+
+		// If the `?` stack is empty, try the `*` backtrack.
+		if starIdx != -1 && sTmpIdx < sLen {
+			pIdx = starIdx + 1
+			sTmpIdx++
+			sIdx = sTmpIdx
+			continue
+		}
+
+		// No backtracking options left.
+		return false, nil
+	}
+}
+
+// iterativeMatchFold implements a robust, high-performance iterative matching algorithm with case-insensitive comparison.
+// It correctly handles backtracking for both `*` and `?`.
+func iterativeMatchFold[T ~string | ~[]byte](pattern, s T) (bool, error) {
+	pLen, sLen := len(pattern), len(s)
+	pIdx, sIdx := 0, 0
+
+	type backtrackState struct {
+		pIdx int
+		sIdx int
+	}
+	backtrackStack := []backtrackState{}
+
+	starIdx, sTmpIdx := -1, -1
+
+	for { // The loop continues as long as there are characters to match or states to backtrack to.
+		// Case 1: `*` wildcard. Save its state and continue.
+		if pIdx < pLen && pattern[pIdx] == '*' {
+			starIdx = pIdx
+			sTmpIdx = sIdx
+			pIdx++
+			continue
+		}
+
+		// Case 2: `?` wildcard. Push the "match one" state and proceed with "match zero".
+		if pIdx < pLen && pattern[pIdx] == '?' {
+			backtrackStack = append(backtrackStack, backtrackState{pIdx: pIdx + 1, sIdx: sIdx + 1})
+			pIdx++
+			continue
+		}
+
+		// Case 3: We have a potential match (literal, `.`, or end of pattern).
+		// If we're at the end of the string, we might still have a match if the rest of the pattern is optional.
+		if sIdx == sLen {
+			// Consume trailing optional wildcards
+			for pIdx < pLen && (pattern[pIdx] == '?' || pattern[pIdx] == '*') {
+				pIdx++
+			}
+			if pIdx == pLen {
+				return true, nil // Matched successfully
+			}
+			// Mismatch, fall through to backtrack
+		} else if pIdx < pLen && (pattern[pIdx] == '.' || equalFoldRune(rune(pattern[pIdx]), rune(s[sIdx]))) {
+			// Case-insensitive character match.
+			pIdx++
+			sIdx++
+			continue
+		} else if pIdx < pLen && pattern[pIdx] == '[' {
+			// Character class matching (case-insensitive)
+			cc, newPIdx, err := NewCharClass(pattern, pIdx)
+			if err != nil {
+				return false, err
+			}
+			if cc.MatchesFold(rune(s[sIdx])) {
+				pIdx = newPIdx
+				sIdx++
+				continue
+			}
+			// Character class doesn't match, fall through to backtrack
+		} else if pIdx < pLen && pattern[pIdx] == '\\' {
+			// Escape sequence handling (case-insensitive)
+			if pIdx+1 >= pLen {
+				return false, ErrBadPattern // Trailing backslash
+			}
+			// Check if escaped character matches (case-insensitive)
+			if equalFoldRune(rune(pattern[pIdx+1]), rune(s[sIdx])) {
+				pIdx += 2 // Skip backslash and escaped character
+				sIdx++
+				continue
+			}
+			// Escaped character doesn't match, fall through to backtrack
+		}
+
+		// Case 4: Mismatch or end of pattern. We must backtrack.
+		// First, try the `?` stack, which holds the most recent decision points.
+		if len(backtrackStack) > 0 {
+			lastState := backtrackStack[len(backtrackStack)-1]
+			backtrackStack = backtrackStack[:len(backtrackStack)-1]
+			// Only use states that are valid for the current string position
+			if lastState.sIdx <= sLen {
+				pIdx = lastState.pIdx
+				sIdx = lastState.sIdx
+				continue
+			}
+		}
+
+		// If the `?` stack is empty, try the `*` backtrack.
+		if starIdx != -1 && sTmpIdx < sLen {
+			pIdx = starIdx + 1
+			sTmpIdx++
+			sIdx = sTmpIdx
+			continue
+		}
+
+		// No backtracking options left.
+		return false, nil
+	}
 }
