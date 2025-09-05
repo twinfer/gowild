@@ -23,6 +23,8 @@
 package gowild
 
 import (
+	"sync"
+
 	"github.com/twinfer/gowild/internal/wildcard"
 )
 
@@ -48,7 +50,7 @@ func Match[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 	return wildcard.Match(pattern, s)
 }
 
-// MatchFold returns true if the pattern matches the input data with case-insensitive
+// MatchFold returns true if the pattern matches the input data with Case-insensitive
 // comparison. Like Match, it supports three types with automatic optimization:
 //
 //   - string: Fast case-insensitive matching for ASCII strings
@@ -64,4 +66,98 @@ func Match[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 //	MatchFold([]rune("CAFÉ*"), []rune("café au lait")) // Unicode case-insensitive
 func MatchFold[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 	return wildcard.MatchFold(pattern, s)
+}
+
+// MatchMultiple concurrently matches a single input against multiple patterns(case ensitive).
+// It returns a slice of booleans where each element corresponds to the pattern
+// at the same index.
+//
+// If any pattern is malformed, it returns an error. The order of results corresponds to
+// the order of input patterns.
+//
+// Example:
+//
+//	patterns := []string{"foo*", "Foo*", "baz[0-9]"}
+//	matches, err := MatchMultiple(patterns, "foobar")
+//	// matches will be [true, false, false]
+func MatchMultiple[S ~string | ~[]byte](patterns []S, s S) ([]bool, error) {
+	results := make([]bool, len(patterns))
+	// Use an error channel to capture an error from any goroutine.
+	errChan := make(chan error, 1)
+
+	var wg sync.WaitGroup
+
+	for i, p := range patterns {
+		wg.Add(1)
+		go func(i int, p S) {
+			defer wg.Done()
+			match, err := Match(p, s)
+			if err != nil {
+				// Try to send the error. If the channel is full, that's fine.
+				select {
+				case errChan <- err:
+				default:
+				}
+				return
+			}
+			results[i] = match
+		}(i, p)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	// Check if any of the goroutines reported an error.
+	if err, ok := <-errChan; ok {
+		return nil, err
+	}
+
+	return results, nil
+}
+
+// MatchFoldMultiple concurrently matches a single input against multiple patterns(case-insensitive).
+// It returns a slice of booleans where each element corresponds to the pattern
+// at the same index.
+//
+// If any pattern is malformed, it returns an error. The order of results corresponds to
+// the order of input patterns.
+//
+// Example:
+//
+//	patterns := []string{"Foo*", "foo*", "baz[0-9]"}
+//	matches, err := MatchMultiple(patterns, "foobar")
+//	// matches will be [true, true, false]
+func MatchFoldMultiple[S ~string | ~[]byte](patterns []S, s S) ([]bool, error) {
+	results := make([]bool, len(patterns))
+	// Use an error channel to capture an error from any goroutine.
+	errChan := make(chan error, 1)
+
+	var wg sync.WaitGroup
+
+	for i, p := range patterns {
+		wg.Add(1)
+		go func(i int, p S) {
+			defer wg.Done()
+			match, err := MatchFold(p, s)
+			if err != nil {
+				// Try to send the error. If the channel is full, that's fine.
+				select {
+				case errChan <- err:
+				default:
+				}
+				return
+			}
+			results[i] = match
+		}(i, p)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	// Check if any of the goroutines reported an error.
+	if err, ok := <-errChan; ok {
+		return nil, err
+	}
+
+	return results, nil
 }
