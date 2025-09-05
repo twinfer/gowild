@@ -40,24 +40,13 @@ func NewCharClass[T ~string | ~[]byte](pattern T, pi int) (*CharClass, int, erro
 
 // Matches checks if the given rune matches this character class.
 func (cc *CharClass) Matches(char rune) bool {
-	matched := false
-
-	// Check individual characters
-	for _, c := range cc.Chars {
-		if c == char {
-			matched = true
-			break
-		}
-	}
+	matched := slices.Contains(cc.Chars, char)
 
 	// Check ranges if not matched yet
 	if !matched {
-		for _, r := range cc.Ranges {
-			if char >= r.Start && char <= r.End {
-				matched = true
-				break
-			}
-		}
+		matched = slices.ContainsFunc(cc.Ranges, func(r CharRange) bool {
+			return char >= r.Start && char <= r.End
+		})
 	}
 
 	// Apply negation if needed
@@ -70,24 +59,16 @@ func (cc *CharClass) Matches(char rune) bool {
 
 // MatchesFold performs case-insensitive matching against this character class.
 func (cc *CharClass) MatchesFold(char rune) bool {
-	matched := false
-
 	// Check individual characters with case folding
-	for _, c := range cc.Chars {
-		if equalFoldRune(c, char) {
-			matched = true
-			break
-		}
-	}
+	matched := slices.ContainsFunc(cc.Chars, func(c rune) bool {
+		return equalFoldRune(c, char)
+	})
 
 	// Check ranges with case folding if not matched yet
 	if !matched {
-		for _, r := range cc.Ranges {
-			if charInRangeFold(char, r.Start, r.End) {
-				matched = true
-				break
-			}
-		}
+		matched = slices.ContainsFunc(cc.Ranges, func(r CharRange) bool {
+			return charInRangeFold(char, r.Start, r.End)
+		})
 	}
 
 	// Apply negation if needed
@@ -611,8 +592,8 @@ func charInRangeFold(char, start, end rune) bool {
 	return false
 }
 
-// iterativeMatch implements a robust, high-performance iterative matching algorithm.
-// It correctly handles backtracking for both `*` and `?`.
+// iterativeMatch case-sensitive version of the iterative matching algorithm.
+// It handles backtracking for both `*` and `?`.
 func iterativeMatch[T ~string | ~[]byte](pattern, s T) (bool, error) {
 	pLen, sLen := len(pattern), len(s)
 	pIdx, sIdx := 0, 0
@@ -634,10 +615,23 @@ func iterativeMatch[T ~string | ~[]byte](pattern, s T) (bool, error) {
 			continue
 		}
 
-		// Case 2: `?` wildcard. Push the "match one" state and proceed with "match zero".
+		// Case 2: `?` wildcard optimization - handle consecutive `?` as a group
 		if pIdx < pLen && pattern[pIdx] == '?' {
-			backtrackStack = append(backtrackStack, backtrackState{pIdx: pIdx + 1, sIdx: sIdx + 1})
-			pIdx++
+			// Count consecutive `?` wildcards
+			qStart := pIdx
+			for pIdx < pLen && pattern[pIdx] == '?' {
+				pIdx++
+			}
+			qCount := pIdx - qStart
+
+			// Try all possibilities from consuming 0 to min(qCount, remaining chars) characters
+			// Push states in reverse order so we try the "consume more" options first
+			maxConsume := min(sLen-sIdx, qCount)
+
+			for consume := maxConsume; consume >= 1; consume-- {
+				backtrackStack = append(backtrackStack, backtrackState{pIdx: pIdx, sIdx: sIdx + consume})
+			}
+			// The current path tries consuming 0 characters (continue immediately)
 			continue
 		}
 
@@ -709,8 +703,8 @@ func iterativeMatch[T ~string | ~[]byte](pattern, s T) (bool, error) {
 	}
 }
 
-// iterativeMatchFold implements a robust, high-performance iterative matching algorithm with case-insensitive comparison.
-// It correctly handles backtracking for both `*` and `?`.
+// iterativeMatchFold case-insensitive version of the iterative matching algorithm.
+// It handles backtracking for both `*` and `?`, with Unicode case folding.
 func iterativeMatchFold[T ~string | ~[]byte](pattern, s T) (bool, error) {
 	pLen, sLen := len(pattern), len(s)
 	pIdx, sIdx := 0, 0
@@ -732,10 +726,23 @@ func iterativeMatchFold[T ~string | ~[]byte](pattern, s T) (bool, error) {
 			continue
 		}
 
-		// Case 2: `?` wildcard. Push the "match one" state and proceed with "match zero".
+		// Case 2: `?` wildcard optimization - handle consecutive `?` as a group
 		if pIdx < pLen && pattern[pIdx] == '?' {
-			backtrackStack = append(backtrackStack, backtrackState{pIdx: pIdx + 1, sIdx: sIdx + 1})
-			pIdx++
+			// Count consecutive `?` wildcards
+			qStart := pIdx
+			for pIdx < pLen && pattern[pIdx] == '?' {
+				pIdx++
+			}
+			qCount := pIdx - qStart
+
+			// Try all possibilities from consuming 0 to min(qCount, remaining chars) characters
+			// Push states in reverse order so we try the "consume more" options first
+			maxConsume := min(sLen-sIdx, qCount)
+
+			for consume := maxConsume; consume >= 1; consume-- {
+				backtrackStack = append(backtrackStack, backtrackState{pIdx: pIdx, sIdx: sIdx + consume})
+			}
+			// The current path tries consuming 0 characters (continue immediately)
 			continue
 		}
 

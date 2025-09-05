@@ -1,14 +1,25 @@
 // Package gowild provides highly optimized functions for matching strings against
 // patterns containing wildcards. It is designed for performance-critical
-// applications that require fast pattern matching on ASCII or byte-oriented strings.
-//
-// For Unicode-aware matching, see the 'ByRune' variants of the functions.
+// applications that require fast pattern matching on ASCII, Unicode, or binary data.
 //
 // # Supported Wildcards:
 //
 //   - `*`: Matches any sequence of characters (including zero characters).
 //   - `?`: Matches any single character or zero characters (an optional character).
 //   - `.`: Matches any single character (the character must be present).
+//   - `[abc]`: Matches any character in the set (a, b, or c)
+//   - `[!abc]` or `[^abc]`: Matches any character not in the set
+//   - `[a-z]`: Matches any character in the range a to z
+//   - `\*`, `\?`, `\.`, `\[`: Matches the literal character
+//
+// # Type Support:
+//
+// The package supports three input types through Go generics:
+//   - `string`: Optimized byte-wise matching for ASCII strings
+//   - `[]byte`: Zero-allocation matching for byte slices
+//   - `[]rune`: Unicode-aware matching for multi-byte characters
+//
+// The functions automatically choose the optimal matching strategy based on the input type.
 package gowild
 
 import (
@@ -18,66 +29,39 @@ import (
 // ErrBadPattern indicates a pattern was malformed.
 var ErrBadPattern = wildcard.ErrBadPattern
 
-// Match returns true if the pattern matches the string s. It is the fastest
-// matching function in this package, optimized for performance by operating on bytes.
+// Match returns true if the pattern matches the input data. It supports three types:
 //
-// This function is ideal for ASCII strings or when byte-wise comparison is
-// sufficient. It does NOT correctly handle multi-byte Unicode characters.
-// For Unicode-aware matching, use MatchByRune.
+//   - string: Fast byte-wise matching optimized for ASCII strings
+//   - []byte: Zero-allocation matching for byte slices
+//   - []rune: Unicode-aware matching for multi-byte characters
 //
-// It supports wildcards and character classes:
-//   - `*`: Matches any sequence of characters (including zero characters)
-//   - `?`: Matches any single character or zero characters (optional)
-//   - `.`: Matches any single character (required)
-//   - `[abc]`: Matches any character in the set (a, b, or c)
-//   - `[!abc]` or `[^abc]`: Matches any character not in the set
-//   - `[a-z]`: Matches any character in the range a to z
-//   - `\*`, `\?`, `\.`, `\[`: Matches the literal character
-func Match(pattern, s string) (bool, error) {
+// The function automatically selects the optimal matching strategy based on the input type.
+// For ASCII strings, it uses fast byte-wise operations. For Unicode strings, use []rune type
+// to ensure correct matching of multi-byte characters.
+//
+// Examples:
+//
+//	Match("hello*", "hello world")           // string matching
+//	Match([]byte("*.txt"), []byte("file.txt")) // byte slice matching
+//	Match([]rune("café*"), []rune("café au lait")) // Unicode matching
+func Match[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 	return wildcard.Match(pattern, s)
 }
 
-// MatchByRune returns true if the pattern matches the string s, with full
-// support for Unicode characters. It operates on runes instead of bytes,
-// allowing wildcards to correctly match multi-byte characters (e.g., a `.` can
-// match `é`).
+// MatchFold returns true if the pattern matches the input data with case-insensitive
+// comparison. Like Match, it supports three types with automatic optimization:
 //
-// This function should be used when the input strings may contain non-ASCII
-// characters. Note that this correctness comes with a performance cost compared
-// to the byte-wise Match function, as it involves converting strings to rune slices.
-func MatchByRune(pattern, s string) (bool, error) {
-	return wildcard.Match([]rune(pattern), []rune(s))
-}
-
-// MatchFromByte returns true if the pattern matches the byte slice s.
-// It is functionally equivalent to Match but operates directly on byte slices,
-// which can prevent string-to-slice conversion allocations in performance-sensitive code.
-func MatchFromByte(pattern, s []byte) (bool, error) {
-	return wildcard.Match(pattern, s)
-}
-
-// MatchFold returns true if the pattern matches the string s in a case-insensitive
-// manner. It uses simple case-folding and is optimized for ASCII strings.
+//   - string: Fast case-insensitive matching for ASCII strings
+//   - []byte: Zero-allocation case-insensitive matching for byte slices
+//   - []rune: Unicode-aware case-insensitive matching
 //
-// Like Match, this function operates on bytes and does not correctly handle
-// multi-byte Unicode characters. For case-insensitive Unicode matching, use
-// MatchFoldRune.
-func MatchFold(pattern, s string) (bool, error) {
-	return wildcard.MatchFold(pattern, s)
-}
-
-// MatchFoldRune returns true if the pattern matches the string s with
-// case-insensitivity and full Unicode support.
+// For ASCII strings, it uses optimized case-folding. For proper Unicode case-insensitive
+// matching, use []rune type.
 //
-// It combines the case-folding logic of MatchFold with the rune-wise matching
-// of MatchByRune. It is the most correct but also the most computationally
-// expensive matching function in this package.
-func MatchFoldRune(pattern, s string) (bool, error) {
-	return wildcard.MatchFold([]rune(pattern), []rune(s))
-}
-
-// MatchFoldByte returns true if the pattern matches the byte slice s with
-// case-insensitivity. It is the byte-slice equivalent of MatchFold.
-func MatchFoldByte(pattern, s []byte) (bool, error) {
+// Examples:
+//
+//	MatchFold("HELLO*", "hello world")           // ASCII case-insensitive
+//	MatchFold([]rune("CAFÉ*"), []rune("café au lait")) // Unicode case-insensitive
+func MatchFold[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 	return wildcard.MatchFold(pattern, s)
 }
