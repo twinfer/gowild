@@ -1,5 +1,7 @@
-// Package wildcard contains the core implementation of the wildcard matching logic.
-// It is intended for internal use by the parent gowild package.
+// Package wildcard contains the core unified implementation of the wildcard matching logic.
+// It provides a single MatchInternal function that handles both case-sensitive and
+// case-insensitive matching with optimal performance. This package is intended for
+// internal use by the parent gowild package.
 package wildcard
 
 import (
@@ -43,20 +45,11 @@ type CharClass struct {
 	Ranges  []CharRange // Character ranges
 }
 
-// NewCharClass creates a new CharClass by parsing the pattern at the given position.
-// Returns the parsed CharClass, the new position after the class, and any error.
-func NewCharClass[T ~string | ~[]byte](pattern T, pi int) (*CharClass, int, error) {
-	switch p := any(pattern).(type) {
-	case string:
-		return parseCharClassString(p, pi)
-	case []byte:
-		return parseCharClassString(string(pattern), pi)
-	}
-	return nil, pi, ErrBadPattern
-}
-
-// Matches checks if the given rune matches this character class.
-func (cc *CharClass) Matches(char rune) bool {
+// MatchesWithFold checks if the given rune matches this character class.
+// Note: Character classes are always case-sensitive, regardless of the fold parameter.
+// This maintains compatibility with standard glob behavior where [a-z] should not match 'A'.
+func (cc *CharClass) MatchesWithFold(char rune, fold bool) bool {
+	// Character classes are always case-sensitive
 	matched := slices.Contains(cc.Chars, char)
 
 	// Check ranges if not matched yet
@@ -74,13 +67,47 @@ func (cc *CharClass) Matches(char rune) bool {
 	return matched
 }
 
-// parseCharClassString parses a character class from a string pattern.
-func parseCharClassString(pattern string, pi int) (*CharClass, int, error) {
-	if pi >= len(pattern) || rune(pattern[pi]) != wildcardBracket {
+// NewCharClass creates a new CharClass by parsing the pattern at the given position.
+// Returns the parsed CharClass, the new position after the class, and any error.
+func NewCharClass[T ~string | ~[]byte](pattern T, pi int) (*CharClass, int, error) {
+	// Use proper UTF-8 decoding for consistent behavior
+	var isString bool
+	var pStr string
+	var pBytes []byte
+
+	if ps, ok := any(pattern).(string); ok {
+		isString = true
+		pStr = ps
+	} else {
+		isString = false
+		pBytes = any(pattern).([]byte)
+	}
+
+	// Helper function to decode rune at position
+	decodeRune := func(pos int) (rune, int) {
+		if isString {
+			if pos >= len(pStr) {
+				return 0, 0
+			}
+			return utf8.DecodeRuneInString(pStr[pos:])
+		} else {
+			if pos >= len(pBytes) {
+				return 0, 0
+			}
+			return utf8.DecodeRune(pBytes[pos:])
+		}
+	}
+
+	if pi >= len(pattern) {
 		return nil, pi, ErrBadPattern
 	}
 
-	pi++ // Skip the opening '['
+	r, width := decodeRune(pi)
+	if r != wildcardBracket {
+		return nil, pi, ErrBadPattern
+	}
+
+	pi += width // Skip the opening '['
 	if pi >= len(pattern) {
 		return nil, pi, ErrBadPattern
 	}
@@ -88,74 +115,139 @@ func parseCharClassString(pattern string, pi int) (*CharClass, int, error) {
 	cc := &CharClass{}
 
 	// Check for negation
-	if pi < len(pattern) && (rune(pattern[pi]) == '^' || rune(pattern[pi]) == '!') {
-		cc.Negated = true
-		pi++
-		if pi >= len(pattern) {
-			return nil, pi, ErrBadPattern
+	if pi < len(pattern) {
+		r, width = decodeRune(pi)
+		if r == '^' || r == '!' {
+			cc.Negated = true
+			pi += width
+			if pi >= len(pattern) {
+				return nil, pi, ErrBadPattern
+			}
 		}
 	}
 
 	firstChar := true // First character after opening bracket (and optional negation)
 
+	closed := false
 	for pi < len(pattern) {
-		// ']' is only treated as closing bracket if it's not the first character
-		if rune(pattern[pi]) == ']' && !firstChar {
-			pi++ // Skip the closing ']'
+		// Check for closing bracket
+		r, width := decodeRune(pi)
+		if r == ']' && !firstChar {
+			pi += width // Skip the closing ']'
+			closed = true
 			break
 		}
 		firstChar = false
 
-		// Handle escape sequences
+		// Handle escape sequences and character reading
 		var c1 rune
-		if rune(pattern[pi]) == '\\' {
-			if pi+1 >= len(pattern) {
-				return nil, pi, ErrBadPattern
-			}
-			pi++
+		if r == '\\' {
+			pi += width // Skip the backslash
 			if pi >= len(pattern) {
 				return nil, pi, ErrBadPattern
 			}
-		}
-		c1 = rune(pattern[pi])
-		pi++
-
-		// Check for range
-		if pi+1 < len(pattern) && rune(pattern[pi]) == '-' && rune(pattern[pi+1]) != ']' {
-			pi++ // Skip the '-'
-
-			// Handle escape in range end
-			var c2 rune
-			if rune(pattern[pi]) == '\\' {
-				if pi+1 >= len(pattern) {
-					return nil, pi, ErrBadPattern
-				}
-				pi++
-			}
-			if pi >= len(pattern) {
-				return nil, pi, ErrBadPattern
-			}
-			c2 = rune(pattern[pi])
-			pi++
-
-			// Validate range
-			if c1 > c2 {
-				return nil, pi, ErrBadPattern // Invalid range like [z-a]
-			}
-			// Add range
-			cc.Ranges = append(cc.Ranges, CharRange{Start: c1, End: c2})
+			// The escaped character is treated as a literal rune
+			r2, width2 := decodeRune(pi)
+			c1 = r2
+			pi += width2
 		} else {
-			// Add single character
+			// Regular character
+			c1 = r
+			pi += width
+		}
+
+		// Check for range (need to check current position after advancing)
+		if pi < len(pattern) {
+			dashRune, dashWidth := decodeRune(pi)
+			if dashRune == '-' && pi+dashWidth < len(pattern) {
+				// Check if character after dash is not ']'
+				afterDash, _ := decodeRune(pi + dashWidth)
+				if afterDash != ']' {
+					// This is a range, skip the '-' and parse end character
+					pi += dashWidth
+
+					// Handle escape in range end
+					var c2 rune
+					if pi >= len(pattern) {
+						return nil, pi, ErrBadPattern
+					}
+					r3, width3 := decodeRune(pi)
+					if r3 == '\\' {
+						pi += width3 // Skip the backslash
+						if pi >= len(pattern) {
+							return nil, pi, ErrBadPattern
+						}
+						r4, width4 := decodeRune(pi)
+						c2 = r4
+						pi += width4
+					} else {
+						c2 = r3
+						pi += width3
+					}
+
+					// Validate range
+					if c1 > c2 {
+						return nil, pi, ErrBadPattern // Invalid range like [z-a]
+					}
+					// Add range
+					cc.Ranges = append(cc.Ranges, CharRange{Start: c1, End: c2})
+				} else {
+					// Dash followed by ']', treat dash as literal character
+					cc.Chars = append(cc.Chars, c1)
+				}
+			} else {
+				// No dash, treat as single character
+				cc.Chars = append(cc.Chars, c1)
+			}
+		} else {
+			// End of pattern, treat as single character
 			cc.Chars = append(cc.Chars, c1)
 		}
+	}
+
+	// Check if character class was properly closed
+	if !closed {
+		return nil, pi, ErrBadPattern
 	}
 
 	return cc, pi, nil
 }
 
-// iterativeMatch case-sensitive version of the iterative matching algorithm.
-// It handles backtracking for both `*` and `?`.
-func Match[T ~string | ~[]byte](pattern, s T) (bool, error) {
+// equalFoldRune performs case-insensitive rune comparison using Unicode simple folding.
+// This is more efficient than converting to lowercase and comparing.
+func equalFoldRune(r1, r2 rune) bool {
+	if r1 == r2 {
+		return true
+	}
+	// Use unicode.SimpleFold for proper case-insensitive comparison
+	// This handles all Unicode case folding rules efficiently
+	if r1 < r2 {
+		r1, r2 = r2, r1
+	}
+	// SimpleFold cycles through case variants
+	for f := unicode.SimpleFold(r2); f != r2; f = unicode.SimpleFold(f) {
+		if f == r1 {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchInternal is the unified internal matching algorithm that handles both case-sensitive
+// and case-insensitive matching. It uses an optimized backtracking approach with separate
+// stacks for `*` and `?` wildcards to ensure optimal performance.
+//
+// The algorithm supports:
+//   - `*`: Matches any sequence of characters (greedy with backtracking)
+//   - `?`: Matches zero or one character (with backtracking for both options)
+//   - `.`: Matches exactly one non-whitespace character
+//   - `[abc]`: Character classes (always case-sensitive)
+//   - `\x`: Escape sequences for literal characters
+//
+// The fold parameter controls case-insensitive matching using Unicode simple folding.
+// Character classes remain case-sensitive even when fold=true to maintain standard
+// glob behavior compatibility.
+func MatchInternal[T ~string | ~[]byte](pattern, s T, fold bool) (bool, error) {
 	pLen, sLen := len(pattern), len(s)
 	pIdx, sIdx := 0, 0
 
@@ -178,9 +270,11 @@ func Match[T ~string | ~[]byte](pattern, s T) (bool, error) {
 		pIdx int
 		sIdx int
 	}
-	backtrackStack := []backtrackState{}
 
-	starIdx, sTmpIdx := -1, -1
+	// Optimized backtracking: simple state tracking for both wildcards
+	starIdx, sTmpIdx := -1, -1     // For * wildcard backtracking
+	questionIdx, qTmpIdx := -1, -1 // For ? wildcard backtracking
+	qCount, qMatched := 0, 0       // Track ? wildcard limits
 
 	for { // The loop continues as long as there are characters to match or states to backtrack to.
 		// Check for success: both pattern and string fully consumed
@@ -188,60 +282,41 @@ func Match[T ~string | ~[]byte](pattern, s T) (bool, error) {
 			return true, nil
 		}
 
-		// Case 1: `*` wildcard. Save its state and continue.
+		// Case 1: `*` wildcard. Optimize consecutive stars and save state.
 		if pIdx < pLen && pattern[pIdx] == wildcardStar {
+			// Skip all consecutive * wildcards - they're equivalent to a single *
+			for pIdx < pLen && pattern[pIdx] == wildcardStar {
+				pIdx++
+			}
+			// Save the position after all consecutive * for backtracking
 			starIdx = pIdx
 			sTmpIdx = sIdx
-			pIdx++
 			continue
 		}
 
-		// Case 2: `?` wildcard - each `?` matches exactly one character
+		// Case 2: `?` wildcard. Optimize consecutive ? wildcards and save state.
 		if pIdx < pLen && pattern[pIdx] == wildcardQuestion {
-			// Count consecutive `?` wildcards
-			qCount := 0
-			tempPIdx := pIdx
-			for tempPIdx < pLen && pattern[tempPIdx] == wildcardQuestion {
+			// Count and skip all consecutive ? wildcards
+			qCount = 0
+			for pIdx < pLen && pattern[pIdx] == wildcardQuestion {
 				qCount++
-				tempPIdx++
+				pIdx++
 			}
 
-			// Check if we have enough characters left to match all `?` wildcards
-			// For strings and byte slices, we need to decode runes to count properly
-			runeCount := 0
-			tempSIdx := sIdx
+			// Save state for backtracking with question count limit
+			questionIdx = pIdx
+			qTmpIdx = sIdx
+			qMatched = 0 // Reset matched count
 
-			if isString {
-				// Count runes in string
-				for tempSIdx < sLen && runeCount < qCount {
-					_, runeWidth := utf8.DecodeRuneInString(sStr[tempSIdx:])
-					tempSIdx += runeWidth
-					runeCount++
-				}
-			} else {
-				// Count runes in byte slice
-				for tempSIdx < sLen && runeCount < qCount {
-					_, runeWidth := utf8.DecodeRune(sBytes[tempSIdx:])
-					tempSIdx += runeWidth
-					runeCount++
-				}
-			}
-
-			if runeCount < qCount {
-				// Not enough characters, this path fails, need to backtrack
-			} else {
-				// We can match all `?` wildcards, consume them
-				pIdx += qCount
-				sIdx = tempSIdx
-				continue
-			}
+			// Try matching zero characters first (greedy approach - match as few as possible)
+			continue
 		}
 
 		// Case 3: We have a potential match (literal, `.`, or end of pattern).
 		// If we're at the end of the string, we might still have a match if the rest of the pattern is optional.
 		if sIdx == sLen {
-			// Consume trailing star wildcards only (? is not optional in standard glob)
-			for pIdx < pLen && pattern[pIdx] == wildcardStar {
+			// Consume trailing wildcards that can match an empty string
+			for pIdx < pLen && (pattern[pIdx] == wildcardStar || pattern[pIdx] == wildcardQuestion) {
 				pIdx++
 			}
 			if pIdx == pLen {
@@ -288,7 +363,14 @@ func Match[T ~string | ~[]byte](pattern, s T) (bool, error) {
 						sRune, sRuneWidth = utf8.DecodeRune(sBytes[sIdx:])
 					}
 
-					if pRune == sRune {
+					var matches bool
+					if fold {
+						matches = equalFoldRune(pRune, sRune)
+					} else {
+						matches = pRune == sRune
+					}
+
+					if matches {
 						pIdx += 2 // Skip backslash and escaped character
 						sIdx += sRuneWidth
 						// Check for immediate success after escape sequence
@@ -341,7 +423,7 @@ func Match[T ~string | ~[]byte](pattern, s T) (bool, error) {
 					sRune, sRuneWidth = utf8.DecodeRune(sBytes[sIdx:])
 				}
 
-				if cc.Matches(sRune) {
+				if cc.MatchesWithFold(sRune, fold) {
 					pIdx = newPIdx
 					sIdx += sRuneWidth
 					continue
@@ -361,7 +443,14 @@ func Match[T ~string | ~[]byte](pattern, s T) (bool, error) {
 				sRune, sRuneWidth = utf8.DecodeRune(sBytes[sIdx:])
 			}
 
-			if pRune == sRune {
+			var matches bool
+			if fold {
+				matches = equalFoldRune(pRune, sRune)
+			} else {
+				matches = pRune == sRune
+			}
+
+			if matches {
 				pIdx += pRuneWidth
 				sIdx += sRuneWidth
 				continue
@@ -369,21 +458,29 @@ func Match[T ~string | ~[]byte](pattern, s T) (bool, error) {
 		}
 
 		// Case 4: Mismatch or end of pattern. We must backtrack.
-		// First, try the `?` stack, which holds the most recent decision points.
-		if len(backtrackStack) > 0 {
-			lastState := backtrackStack[len(backtrackStack)-1]
-			backtrackStack = backtrackStack[:len(backtrackStack)-1]
-			// Only use states that are valid for the current string position
-			if lastState.sIdx <= sLen {
-				pIdx = lastState.pIdx
-				sIdx = lastState.sIdx
-				continue
+		// First, try ? wildcard backtracking (most recent decisions)
+		if questionIdx != -1 && qTmpIdx < sLen && qMatched < qCount {
+			// Try matching one more character with ? and retry
+			var runeWidth int
+			if isString {
+				_, runeWidth = utf8.DecodeRuneInString(sStr[qTmpIdx:])
+			} else {
+				_, runeWidth = utf8.DecodeRune(sBytes[qTmpIdx:])
 			}
+			qTmpIdx += runeWidth
+			qMatched++
+			pIdx = questionIdx
+			sIdx = qTmpIdx
+			continue
 		}
 
-		// If the `?` stack is empty, try the `*` backtrack.
+		// If ? backtracking exhausted, try * wildcard backtracking
 		if starIdx != -1 && sTmpIdx < sLen {
-			pIdx = starIdx + 1
+			// Advance the string position and retry from after the *
+			// Reset ? state since we're trying a different path
+			questionIdx, qTmpIdx = -1, -1
+			qCount, qMatched = 0, 0
+			pIdx = starIdx
 			sTmpIdx++
 			sIdx = sTmpIdx
 			continue

@@ -72,7 +72,7 @@ func TestCharClassMatching(t *testing.T) {
 				t.Fatalf("NewCharClass failed: %v", err)
 			}
 
-			result := cc.Matches(tt.char)
+			result := cc.MatchesWithFold(tt.char, false)
 			if result != tt.match {
 				t.Errorf("Expected %v for char '%c' in pattern %s, got %v",
 					tt.match, tt.char, tt.pattern, result)
@@ -81,18 +81,18 @@ func TestCharClassMatching(t *testing.T) {
 	}
 }
 
-func TestCharClassCaseInsensitiveMatching(t *testing.T) {
+func TestCharClassAlwaysCaseSensitive(t *testing.T) {
 	tests := []struct {
 		pattern string
 		char    rune
 		match   bool
 	}{
-		{"[abc]", 'A', true},
-		{"[ABC]", 'a', true},
-		{"[a-z]", 'A', true},
-		{"[A-Z]", 'a', true},
-		{"[!abc]", 'A', false},
-		{"[!ABC]", 'a', false},
+		{"[abc]", 'A', false}, // Character classes are always case-sensitive
+		{"[ABC]", 'a', false}, // Character classes are always case-sensitive
+		{"[a-z]", 'A', false}, // Character classes are always case-sensitive
+		{"[A-Z]", 'a', false}, // Character classes are always case-sensitive
+		{"[!abc]", 'A', true}, // Negated: 'A' is not in [abc] (case-sensitive)
+		{"[!ABC]", 'a', true}, // Negated: 'a' is not in [ABC] (case-sensitive)
 	}
 
 	for _, tt := range tests {
@@ -102,10 +102,97 @@ func TestCharClassCaseInsensitiveMatching(t *testing.T) {
 				t.Fatalf("NewCharClass failed: %v", err)
 			}
 
-			result := cc.MatchesFold(tt.char)
+			result := cc.MatchesWithFold(tt.char, false)
 			if result != tt.match {
-				t.Errorf("Expected %v for char '%c' in pattern %s (case insensitive), got %v",
+				t.Errorf("Expected %v for char '%c' in pattern %s (should be case-sensitive), got %v",
 					tt.match, tt.char, tt.pattern, result)
+			}
+		})
+	}
+}
+
+func TestCharClassErrorCases(t *testing.T) {
+	tests := []struct {
+		pattern     string
+		description string
+	}{
+		{"[abc", "unclosed character class"},
+		{"[a-z", "unclosed character class with range"},
+		{"[!abc", "unclosed negated character class"},
+		{"[z-a]", "invalid range (z > a)"},
+		{"[0-\\x8a-0]", "invalid range with escape sequence"},
+		{"[0-\\x8a-0", "unclosed class with invalid range and escape"},
+		{"[\\", "incomplete escape sequence"},
+		{"[a-\\", "incomplete escape in range"},
+		{"[", "empty character class start"},
+		{"[]", "empty character class"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.description, func(t *testing.T) {
+			// Test with string
+			_, _, err := NewCharClass(tt.pattern, 0)
+			if err == nil {
+				t.Errorf("Expected error for pattern %q (%s), got nil", tt.pattern, tt.description)
+			}
+
+			// Test with []byte to ensure consistency
+			_, _, err = NewCharClass([]byte(tt.pattern), 0)
+			if err == nil {
+				t.Errorf("Expected error for []byte pattern %q (%s), got nil", tt.pattern, tt.description)
+			}
+		})
+	}
+}
+
+func TestCharClassConsistency(t *testing.T) {
+	// Test patterns that should behave identically for string and []byte
+	patterns := []string{
+		"[abc]",
+		"[a-z]",
+		"[!a-z]",
+		"[0-9]",
+		"[A-Z]",
+		"[a-zA-Z0-9]",
+		"[abc",        // unclosed
+		"[z-a]",       // invalid range
+		"[0-\\x8a-0]", // escape with invalid range
+		"[0-\xe8-0]",  // invalid UTF-8 byte in pattern
+	}
+
+	for _, pattern := range patterns {
+		t.Run(pattern, func(t *testing.T) {
+			stringClass, stringPos, stringErr := NewCharClass(pattern, 0)
+			byteClass, bytePos, byteErr := NewCharClass([]byte(pattern), 0)
+
+			// Errors should be consistent
+			if (stringErr == nil) != (byteErr == nil) {
+				t.Errorf("Error consistency failed for pattern %q: string err=%v, byte err=%v",
+					pattern, stringErr, byteErr)
+			}
+
+			// If no errors, positions should match
+			if stringErr == nil && byteErr == nil {
+				if stringPos != bytePos {
+					t.Errorf("Position mismatch for pattern %q: string pos=%d, byte pos=%d",
+						pattern, stringPos, bytePos)
+				}
+
+				// Character classes should be equivalent
+				if stringClass.Negated != byteClass.Negated {
+					t.Errorf("Negated mismatch for pattern %q: string=%v, byte=%v",
+						pattern, stringClass.Negated, byteClass.Negated)
+				}
+
+				if len(stringClass.Chars) != len(byteClass.Chars) {
+					t.Errorf("Chars length mismatch for pattern %q: string=%d, byte=%d",
+						pattern, len(stringClass.Chars), len(byteClass.Chars))
+				}
+
+				if len(stringClass.Ranges) != len(byteClass.Ranges) {
+					t.Errorf("Ranges length mismatch for pattern %q: string=%d, byte=%d",
+						pattern, len(stringClass.Ranges), len(byteClass.Ranges))
+				}
 			}
 		})
 	}
