@@ -5,8 +5,8 @@
 // # Supported Wildcards:
 //
 //   - `*`: Matches any sequence of characters (including zero characters).
-//   - `?`: Matches any single character or zero characters (an optional character).
-//   - `.`: Matches any single character (the character must be present).
+//   - `?`: Matches exactly one character (any character).
+//   - `.`: Matches exactly one non-whitespace character.
 //   - `[abc]`: Matches any character in the set (a, b, or c)
 //   - `[!abc]` or `[^abc]`: Matches any character not in the set
 //   - `[a-z]`: Matches any character in the range a to z
@@ -47,6 +47,15 @@ var ErrBadPattern = wildcard.ErrBadPattern
 //	Match([]byte("*.txt"), []byte("file.txt")) // byte slice matching
 //	Match([]rune("café*"), []rune("café au lait")) // Unicode matching
 func Match[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
+	// Handle  "empty Pattren" case
+	if len(pattern) == 0 {
+		if len(s) == 0 {
+			return true, nil
+		} else if len(s) > 0 {
+			return false, nil
+		}
+	}
+	// Delegate everything else to internal function
 	return wildcard.Match(pattern, s)
 }
 
@@ -65,6 +74,16 @@ func Match[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 //	MatchFold("HELLO*", "hello world")           // ASCII case-insensitive
 //	MatchFold([]rune("CAFÉ*"), []rune("café au lait")) // Unicode case-insensitive
 func MatchFold[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
+
+	// Handle  "empty Pattren" case
+	if len(pattern) == 0 {
+		if len(s) == 0 {
+			return true, nil
+		} else if len(s) > 0 {
+			return false, nil
+		}
+	}
+	// Delegate everything else to internal function
 	return wildcard.MatchFold(pattern, s)
 }
 
