@@ -5,257 +5,382 @@ import (
 	"testing"
 )
 
+// baseTestCases contains all test cases for wildcard matching
+// These are used by both case-sensitive and case-insensitive tests
+var baseTestCases = []struct {
+	s       string
+	pattern string
+	result  bool
+}{
+	// --- Empty String cases ---
+	{"", "", true},
+	{"", "*", true},
+	{"", "**", true},
+	{"", "?", false},  // ? requires exactly one character
+	{"", "??", false}, // ?? requires exactly two characters
+	{"", "?*", false}, // ?* requires at least one character
+	{"", "*?", false}, // *? requires at least one character
+	{"", ".", false},
+	{"", ".?", false},
+	{"", "?.", false},
+	{"", ".*", false},
+	{"", "*.", false},
+	{"", "*.?", false},
+	{"", "?.*", false},
+
+	// --- Single Character cases ---
+	{"a", "", false},
+	{"a", "a", true},
+	{"a", "*", true},
+	{"a", "**", true},
+	{"a", "?", true},   // ? matches exactly one character
+	{"a", "??", false}, // ?? requires exactly two characters
+	{"a", ".", true},
+	{"a", ".?", false}, // .? requires exactly two characters
+	{"a", "?.", false}, // ?. requires exactly two characters
+	{"a", ".*", true},
+	{"a", "*.", true},
+	{"a", "*.?", false}, // *.? requires at least two characters
+	{"ax", "?.*", true}, // ? matches 'a', . matches 'x', * matches empty
+
+	// --- Basic Functionality Tests ---
+	{"hello world", "hello world", true},
+	{"hello", "world", false},
+	{"test string", "test string", true},
+	{"😊", "😊", true},
+	{"😊", "👍", false},
+	{"a long string with many unicode chars 👨‍👩‍👧‍👦", "a long string with many unicode chars 👨‍👩‍👧‍👦", true},
+	{"a", "b", false},
+
+	// --- Star Wildcard Tests ---
+	{"file.txt", "file.*", true},
+	{"file.txt", "*.txt", true},
+	{"file.txt", "*.*", true},
+	{"file.txt", "f*.t", true},
+
+	// --- Question Mark Wildcard Tests ---
+	{"cat", "c?t", true},       // ? matches 'a'
+	{"caat", "c?t", false},     // caat has 4 chars, c?t expects 3
+	{"cats", "cat?", true},     // ? matches 's'
+	{"cuts", "c?ts", true},     // ? matches 'u'
+	{"cts", "c?ts", false},     // cts has 3 chars, c?ts expects 4
+	{"caats", "c??ts", true},   // ?? matches 'aa'
+	{"cuts", "c??ts", false},   // cuts has 4 chars, c??ts expects 5
+	{"cabats", "c???ts", true}, // ??? matches 'aba'
+	{"caats", "c???ts", false}, // caats has 5 chars, c???ts expects 6
+	{"caats", "c?t?s", false},  // would need 'c[a]t[a]s' structure
+	{"ca ts", "c?t?s", false},  // space doesn't match structure
+
+	// --- Dot Wildcard Tests ---
+	{"cat", "c.t", true},
+	{"caat", "c..t", true},
+	{"ct", "c.t", false},
+	{"cats", ".ats", true},
+
+	// --- Complex Combination Test ---
+	{"The quick brown 🦊 is named 'Fred'.", "The quick?brown 🦊 is named '*.'.", true},
+	{"The quick brown 🦊 is named 'George'.", "The quick?brown 🦊 is named '*.'.", true},
+
+	// --- Advanced wildcard combinations ---
+	{"axc", "a.c", true},
+	{"abc", "a?c", true}, // ? must match exactly one character
+	{"ac", "a?c", false}, // ac has 2 chars, a?c expects 3
+	{"abbc", "a*c", true},
+	{"axbyc", "a*b*c", true},
+	{"axbyc", "a.b.c", true},
+	{"axbyc", "a?b?c", true},
+	{"axbyc", "a*b?c", true},
+	{"axbyc", "a?b*c", true},
+	{"axbyc", "a.b*c", true},
+	{"axbyc", "a*b.c", true},
+	{"axbyc", "a.b?c", true},
+	{"axbyc", "a?b.c", true},
+
+	// --- Consecutive and redundant wildcards ---
+	{"longstring", "long**string", true},
+	{"longstring", "long***string", true},
+
+	// --- Character class tests ---
+	// Basic character sets
+	{"a", "[abc]", true},
+	{"b", "[abc]", true},
+	{"c", "[abc]", true},
+	{"d", "[abc]", false},
+
+	// Negated character sets
+	{"a", "[!abc]", false},
+	{"d", "[!abc]", true},
+	{"a", "[^abc]", false},
+	{"d", "[^abc]", true},
+
+	// Character ranges
+	{"b", "[a-z]", true},
+	{"A", "[a-z]", false},
+	{"1", "[0-9]", true},
+	{"a", "[0-9]", false},
+	{"5", "[0-9a-f]", true},
+	{"b", "[0-9a-f]", true},
+	{"g", "[0-9a-f]", false},
+
+	// Special characters in character classes
+	{"]", "[]]", true},
+	{"-", "[-]", true},
+	{"a", "[-az]", true},
+	{"-", "[-az]", true},
+	{"z", "[-az]", true},
+	{"b", "[-az]", false},
+
+	// Complex character classes
+	{"A", "[A-Za-z]", true},
+	{"z", "[A-Za-z]", true},
+	{"5", "[A-Za-z]", false},
+	{"F", "[0-9A-Fa-f]", true},
+	{"g", "[0-9A-Fa-f]", false},
+	{"_", "[a-zA-Z0-9_]", true},
+	{"!", "[a-zA-Z0-9_]", false},
+
+	// Character classes with special positions
+	{"a]", "[a]]", true}, // [a]] = character class [a] + literal ']'
+	{"a", "[a]]", false}, // [a]] does not match just 'a' (needs 'a]')
+	{"]", "[a]]", false}, // [a]] does not match just ']' (needs 'a]')
+	{"-", "[a-]", true},
+	{"a", "[a-]", true},
+	{"b", "[a-]", false},
+	{"-", "[-a]", true},
+	{"a", "[-a]", true},
+	{"b", "[-a]", false},
+
+	// Multiple ranges in one class
+	{"5", "[0-359]", true}, // Fixed: 0-3 and 5-9 ranges
+	{"4", "[0-359]", false},
+	{"A", "[A-CF-H]", true},
+	{"D", "[A-CF-H]", false},
+
+	// Negated complex classes
+	{"4", "[!0-359]", true},
+	{"5", "[!0-359]", false},
+	{"D", "[^A-CF-H]", true},
+	{"A", "[^A-CF-H]", false},
+
+	// Character classes in patterns with wildcards
+	{"abc", "[a-z]*", true},
+	{"123", "[a-z]*", false},
+	{"a1b", "[a-z]*[0-9]*[a-z]", true},
+	{"ab1", "[a-z]*[0-9]*[a-z]", false},
+	{"test123", "*[0-9]", true},
+	{"testABC", "*[0-9]", false},
+
+	// Empty matches with character classes
+	{"", "[a-z]*", false}, // [a-z]* requires at least one char from [a-z]
+	{"", "[a-z]", false},
+	{"", "[a-z]?", false}, // [a-z]? requires at least one char from [a-z]
+
+	// --- Escape sequence tests ---
+	{"a*", "a\\*", true},         // Literal asterisk
+	{"a?", "a\\?", true},         // Literal question mark
+	{"a.", "a\\.", true},         // Literal dot
+	{"a[", "a\\[", true},         // Literal opening bracket
+	{"a*b", "a\\*b", true},       // Literal asterisk in middle
+	{"*start", "\\*start", true}, // Literal asterisk at start
+	{"end*", "end\\*", true},     // Literal asterisk at end
+	{"a?b", "a\\?b", true},       // Literal question mark in middle
+	{"?start", "\\?start", true}, // Literal question mark at start
+	{"end?", "end\\?", true},     // Literal question mark at end
+	{"a.b", "a\\.b", true},       // Literal dot in middle
+	{".start", "\\.start", true}, // Literal dot at start
+	{"end.", "end\\.", true},     // Literal dot at end
+	{"a[b", "a\\[b", true},       // Literal bracket in middle
+	{"[start", "\\[start", true}, // Literal bracket at start
+	{"end[", "end\\[", true},     // Literal bracket at end
+	{"a\\", "a\\\\", true},       // Pattern a\\ matches string a\\
+	{"\\test", "\\\\test", true}, // Pattern \\test matches string \test
+	{"test\\", "test\\\\", true}, // Pattern test\\ matches string test\\
+	// Mixed escape sequences
+	{"*?.[", "\\*\\?\\.\\[", true},
+	{"test*file?.txt[0]", "test\\*file\\?\\.txt\\[0]", true},
+	// Escape sequences that don't match
+	{"ab", "a\\*", false}, // Literal * doesn't match b
+	{"ab", "a\\?", false}, // Literal ? doesn't match b
+	{"ab", "a\\.", false}, // Literal . doesn't match b
+	{"ab", "a\\[", false}, // Literal [ doesn't match b
+
+	// --- Dot wildcard tests (matches non-whitespace characters) ---
+	{"a", ".", true},             // . matches single non-whitespace char
+	{"1", ".", true},             // . matches digit
+	{"_", ".", true},             // . matches underscore
+	{"-", ".", true},             // . matches hyphen
+	{"@", ".", true},             // . matches symbol
+	{"hello", "hell.", true},     // . at end matches 'o'
+	{"hello", ".ello", true},     // . at start matches 'h'
+	{"hello", "he.lo", true},     // . in middle matches 'l'
+	{"test123", "test...", true}, // Multiple . match multiple non-whitespace
+	// Dot should NOT match whitespace
+	{" ", ".", false},                     // . does not match space
+	{"\t", ".", false},                    // . does not match tab
+	{"\n", ".", false},                    // . does not match newline
+	{"\r", ".", false},                    // . does not match carriage return
+	{"hello world", "hello.world", false}, // . does not match space between words
+	{"a\tb", "a.b", false},                // . does not match tab
+	{"", ".", false},                      // . does not match empty (no char to match)
+	{"ab", ".", false},                    // . matches exactly one char, not two
+	// Mixed patterns with dot
+	{"file1.txt", "file.", false},     // . doesn't match '1' because string is longer
+	{"file1.txt", "file.*txt", true},  // . matches '1', * matches '.', txt matches 'txt'
+	{"user_name", "user.name", true},  // . matches '_'
+	{"user name", "user.name", false}, // . doesn't match ' '
+
+	// --- Greediness and backtracking cases ---
+	{"ababa", "a*a", true},           // * should match "bab"
+	{"abab", "a*b", true},            // * should match "ba"
+	{"aaab", "*ab", true},            // * should match "aa"
+	{"mississippi", "m*i*i", true},   // First * is "ississ", second * is ""
+	{"mississippi", "m*iss*i", true}, // First * is "", second * is "iss"
+	{"ab", "a*b", true},
+	{"aab", "a*b", true},
+	{"aaab", "a*b", true},
+
+	// --- Patterns ending in wildcards ---
+	{"abc", "abc*", true},
+	{"abcd", "abc?", true}, // ? requires exactly one more character
+	{"abc", "abc?", false}, // abc has 3 chars, abc? expects 4
+	{"abc", "abc.", false},
+	{"abc", "ab.", true},
+
+	// --- More failing cases ---
+	{"axbyc", "a.b-c", false},
+	{"axbyc", "a?b-c", false},
+	{"ab", "a.b", false},
+	{"a", "a.", false},
+
+	// Unicode and emoji test cases - important for rune matching
+	{"café", "café", true},
+	{"café", "caf?", true}, // ? matches 'é'
+	{"café", "ca*", true},
+	{"café", "c.f.", true},
+	{"🌟", "🌟", true},
+	{"🌟", "?", true},
+	{"🌟", "*", true},
+	{"🌟", ".", true},
+	{"🌟hello", "?hello", true},
+	{"🌟hello", "*hello", true},
+	{"🌟hello", ".hello", true},
+
+	// Complex Unicode sequences
+	{"🌅☕️📰", "🌅☕️📰", true},
+	{"🌅☕️📰", "🌅*", true},
+	{"🌅☕️📰", "*📰", true},
+	{"🌅☕️📰", "?☕️?", true},
+	{"🌅☕️📰", "....", true}, // 4 Unicode characters should need 4 dots
+
+	{"match an emoji 😃", "match an emoji ?", true},
+	{"match an emoji 😃", "match * emoji ?", true},
+	{"do not match because of different emoji 😃", "do not match because of different emoji 😄", false},
+
+	// --- Unicode characters mixed with wildcards ---
+	{"café", "caf?", true}, // ? matches 'é'
+	{"café", "caf.", true},
+	{"café", "c.f.", true},
+	{"你好世界", "你好*", true},
+	{"你好世界", "你好.界", true},
+	{"你好世界", "你好?界", true}, // ? matches '世'
+	{"你好世界", "*世界", true},
+	{"你好世界X", "你好世界?", true}, // ? matches 'X'
+	{"你好世界", "你好世界?", false}, // Missing character for ?
+	{"你好世界", "你好世界.", false},
+}
+
+// caseFoldCases contains test cases specifically for case-insensitive matching
+// Used by both TestMatchFold and TestMatchFold
+var caseFoldCases = []struct {
+	s       string
+	pattern string
+	result  bool
+}{
+	// Basic case-insensitive matching
+	{"HELLO", "hello", true},
+	{"hello", "HELLO", true},
+	{"Hello", "hELLo", true},
+	{"WORLD", "world", true},
+	{"TeSt", "tEsT", true},
+
+	// Case-insensitive with wildcards
+	{"HELLO WORLD", "hello*", true},
+	{"HELLO WORLD", "*world", true},
+	{"HELLO WORLD", "hello*world", true},
+	{"Hello Beautiful World", "hello*world", true},
+
+	// Case-insensitive with ? wildcard
+	{"HELLO", "hell?", true},
+	{"HELLO", "?ello", true},
+	{"Hello", "h?llo", true},
+	{"CAT", "c?t", true},
+	{"Cat", "C?T", true},
+	{"BAT", "?at", true},
+	{"CUTS", "c?ts", true},
+
+	// Case-insensitive with . wildcard (non-whitespace only)
+	{"HELLO", "hell.", true},
+	{"HELLO", ".ello", true},
+	{"Hello", "he.lo", true},
+	{"TEST123", "test...", true},
+	{"ABC", "a.c", true},
+	{"axc", "A.C", true},
+	{"A C", "a.c", false}, // . doesn't match space
+
+	// Unicode case-insensitive
+	{"CAFÉ", "café", true},
+	{"café", "CAFÉ", true},
+	{"Café", "cAfÉ", true},
+
+	// Complex patterns
+	{"TEST FILE NAME", "test*file*name", true},
+	{"Test File Name", "TEST*FILE*NAME", true},
+	{"DOCUMENT.PDF", "*.pdf", true},
+	{"DATA.BIN", "*.*", true},
+	{"FILE.TXT", "file.*", true},
+	{"File.Txt", "FILE.*", true},
+	{"TEST123FILE", "test*file", true},
+
+	// Character class tests - classes remain case-sensitive even in case-insensitive mode
+	{"hello", "[h]ello", true},  // Exact case match in character class
+	{"HELLO", "[h]ello", false}, // Different case in character class should not match
+	{"Hello", "[H]ello", true},  // Exact case match in character class
+	{"hello", "[H]ello", false}, // Different case in character class should not match
+
+	// Character class ranges - case-sensitive
+	{"abc", "[a-c]bc", true},  // 'a' is in range [a-c]
+	{"ABC", "[a-c]bc", false}, // 'A' is not in range [a-c] (case-sensitive)
+	{"Abc", "[A-C]bc", true},  // 'A' is in range [A-C]
+	{"abc", "[A-C]bc", false}, // 'a' is not in range [A-C] (case-sensitive)
+
+	// Negated character classes - case-sensitive
+	{"hello", "[!H]ello", true},  // 'h' is not 'H' (case-sensitive)
+	{"Hello", "[!H]ello", false}, // 'H' matches 'H' in negated class
+	{"hello", "[!h]ello", false}, // 'h' matches 'h' in negated class
+	{"Hello", "[!h]ello", true},  // 'H' is not 'h' (case-sensitive)
+
+	// Mixed character classes with case-insensitive pattern matching
+	{"Test123", "test[0-9]*", true},  // Pattern is case-insensitive, but [0-9] is as expected
+	{"TEST123", "test[0-9]*", true},  // Pattern matching is case-insensitive
+	{"TestABC", "test[0-9]*", false}, // 'A' is not in [0-9] range
+	{"testXYZ", "TEST[a-z]*", false}, // Pattern matching is case-insensitive, but [a-z] doesn't match 'X' (case-sensitive)
+	{"testxyz", "TEST[a-z]*", true},  // Pattern matching is case-insensitive, [a-z] matches 'x'
+
+	// Edge cases
+	{"Test", "test", true},
+	{"TEST", "test", true},
+	{"File.TXT", "file.txt", true},
+
+	// Should not match
+	{"HELLO", "goodbye", false},
+	{"hello world", "hello universe", false},
+	{"UPPER", "lower", false}, // Different content
+}
+
 // TestMatch validates the logic of wild card matching for string input,
 // it supports '*', '?' and '.' wildcards with various test cases.
 func TestMatch(t *testing.T) {
-	cases := []struct {
-		s       string
-		pattern string
-		result  bool
-	}{
-		// --- Empty String cases ---
-		{"", "", true},
-		{"", "*", true},
-		{"", "**", true},
-		{"", "?", false},  // ? requires exactly one character
-		{"", "??", false}, // ?? requires exactly two characters
-		{"", "?*", false}, // ?* requires at least one character
-		{"", "*?", false}, // *? requires at least one character
-		{"", ".", false},
-		{"", ".?", false},
-		{"", "?.", false},
-		{"", ".*", false},
-		{"", "*.", false},
-		{"", "*.?", false},
-		{"", "?.*", false},
-
-		// --- Single Character cases ---
-		{"a", "", false},
-		{"a", "a", true},
-		{"a", "*", true},
-		{"a", "**", true},
-		{"a", "?", true},   // ? matches exactly one character
-		{"a", "??", false}, // ?? requires exactly two characters
-		{"a", ".", true},
-		{"a", ".?", false}, // .? requires exactly two characters
-		{"a", "?.", false}, // ?. requires exactly two characters
-		{"a", ".*", true},
-		{"a", "*.", true},
-		{"a", "*.?", false}, // *.? requires at least two characters
-		{"ax", "?.*", true}, // ? matches 'a', . matches 'x', * matches empty
-
-		// --- Basic Functionality Tests ---
-		{"hello world", "hello world", true},
-		{"hello", "world", false},
-		{"HELLO WORLD", "HELLO WORLD", true},
-		{"HELLO", "hello", false},
-		{"😊", "😊", true},
-		{"😊", "👍", false},
-		{"a long string with many unicode chars 👨‍👩‍👧‍👦", "a long string with many unicode chars 👨‍👩‍👧‍👦", true},
-		{"a", "b", false},
-
-		// --- Star Wildcard Tests ---
-		{"file.txt", "file.*", true},
-		{"file.txt", "*.txt", true},
-		{"file.txt", "*.*", true},
-		{"file.txt", "f*.t", true},
-
-		// --- Question Mark Wildcard Tests ---
-		{"cat", "c?t", true},       // ? matches 'a'
-		{"caat", "c?t", false},     // caat has 4 chars, c?t expects 3
-		{"cats", "cat?", true},     // ? matches 's'
-		{"cuts", "c?ts", true},     // ? matches 'u'
-		{"cts", "c?ts", false},     // cts has 3 chars, c?ts expects 4
-		{"caats", "c??ts", true},   // ?? matches 'aa'
-		{"cuts", "c??ts", false},   // cuts has 4 chars, c??ts expects 5
-		{"cabats", "c???ts", true}, // ??? matches 'aba'
-		{"caats", "c???ts", false}, // caats has 5 chars, c???ts expects 6
-		{"caats", "c?t?s", false},  // would need 'c[a]t[a]s' structure
-		{"ca ts", "c?t?s", false},  // space doesn't match structure
-
-		// --- Dot Wildcard Tests ---
-		{"cat", "c.t", true},
-		{"caat", "c..t", true},
-		{"ct", "c.t", false},
-		{"cats", ".ats", true},
-
-		// --- Complex Combination Test ---
-		{"The quick brown 🦊 is named 'Fred'.", "The quick?brown 🦊 is named '*.'.", true},
-		{"The quick brown 🦊 is named 'George'.", "The quick?brown 🦊 is named '*.'.", true},
-
-		// --- Advanced wildcard combinations ---
-		{"axc", "a.c", true},
-		{"abc", "a?c", true}, // ? must match exactly one character
-		{"ac", "a?c", false}, // ac has 2 chars, a?c expects 3
-		{"abbc", "a*c", true},
-		{"axbyc", "a*b*c", true},
-		{"axbyc", "a.b.c", true},
-		{"axbyc", "a?b?c", true},
-		{"axbyc", "a*b?c", true},
-		{"axbyc", "a?b*c", true},
-		{"axbyc", "a.b*c", true},
-		{"axbyc", "a*b.c", true},
-		{"axbyc", "a.b?c", true},
-		{"axbyc", "a?b.c", true},
-
-		// --- Consecutive and redundant wildcards ---
-		{"longstring", "long**string", true},
-		{"longstring", "long***string", true},
-
-		// --- Character class tests ---
-		// Basic character sets
-		{"a", "[abc]", true},
-		{"b", "[abc]", true},
-		{"c", "[abc]", true},
-		{"d", "[abc]", false},
-
-		// Negated character sets
-		{"a", "[!abc]", false},
-		{"d", "[!abc]", true},
-		{"a", "[^abc]", false},
-		{"d", "[^abc]", true},
-
-		// Character ranges
-		{"b", "[a-z]", true},
-		{"A", "[a-z]", false},
-		{"1", "[0-9]", true},
-		{"a", "[0-9]", false},
-		{"5", "[0-9a-f]", true},
-		{"b", "[0-9a-f]", true},
-		{"g", "[0-9a-f]", false},
-
-		// Special characters in character classes
-		{"]", "[]]", true},
-		{"-", "[-]", true},
-		{"a", "[-az]", true},
-		{"-", "[-az]", true},
-		{"z", "[-az]", true},
-		{"b", "[-az]", false},
-
-		// Complex character classes
-		{"A", "[A-Za-z]", true},
-		{"z", "[A-Za-z]", true},
-		{"5", "[A-Za-z]", false},
-		{"F", "[0-9A-Fa-f]", true},
-		{"g", "[0-9A-Fa-f]", false},
-		{"_", "[a-zA-Z0-9_]", true},
-		{"!", "[a-zA-Z0-9_]", false},
-
-		// Character classes with special positions
-		{"a]", "[a]]", true}, // [a]] = character class [a] + literal ']'
-		{"a", "[a]]", false}, // [a]] does not match just 'a' (needs 'a]')
-		{"]", "[a]]", false}, // [a]] does not match just ']' (needs 'a]')
-		{"-", "[a-]", true},
-		{"a", "[a-]", true},
-		{"b", "[a-]", false},
-		{"-", "[-a]", true},
-		{"a", "[-a]", true},
-		{"b", "[-a]", false},
-
-		// Multiple ranges in one class
-		{"5", "[0-359]", true}, // Fixed: 0-3 and 5-9 ranges
-		{"4", "[0-359]", false},
-		{"A", "[A-CF-H]", true},
-		{"D", "[A-CF-H]", false},
-
-		// Negated complex classes
-		{"4", "[!0-359]", true},
-		{"5", "[!0-359]", false},
-		{"D", "[^A-CF-H]", true},
-		{"A", "[^A-CF-H]", false},
-
-		// Character classes in patterns with wildcards
-		{"abc", "[a-z]*", true},
-		{"123", "[a-z]*", false},
-		{"a1b", "[a-z]*[0-9]*[a-z]", true},
-		{"ab1", "[a-z]*[0-9]*[a-z]", false},
-		{"test123", "*[0-9]", true},
-		{"testABC", "*[0-9]", false},
-
-		// Empty matches with character classes
-		{"", "[a-z]*", false}, // [a-z]* requires at least one char from [a-z]
-		{"", "[a-z]", false},
-		{"", "[a-z]?", false}, // [a-z]? requires at least one char from [a-z]
-
-		// --- Escape sequence tests ---
-		{"a*", "a\\*", true},         // Literal asterisk
-		{"a?", "a\\?", true},         // Literal question mark
-		{"a.", "a\\.", true},         // Literal dot
-		{"a[", "a\\[", true},         // Literal opening bracket
-		{"a*b", "a\\*b", true},       // Literal asterisk in middle
-		{"*start", "\\*start", true}, // Literal asterisk at start
-		{"end*", "end\\*", true},     // Literal asterisk at end
-		{"a?b", "a\\?b", true},       // Literal question mark in middle
-		{"?start", "\\?start", true}, // Literal question mark at start
-		{"end?", "end\\?", true},     // Literal question mark at end
-		{"a.b", "a\\.b", true},       // Literal dot in middle
-		{".start", "\\.start", true}, // Literal dot at start
-		{"end.", "end\\.", true},     // Literal dot at end
-		{"a[b", "a\\[b", true},       // Literal bracket in middle
-		{"[start", "\\[start", true}, // Literal bracket at start
-		{"end[", "end\\[", true},     // Literal bracket at end
-		{"a\\", "a\\\\", true},       // Pattern a\\ matches string a\
-		{"\\test", "\\\\test", true}, // Pattern \\test matches string \test
-		{"test\\", "test\\\\", true}, // Pattern test\\ matches string test\
-		// Mixed escape sequences
-		{"*?.[", "\\*\\?\\.\\[", true},
-		{"test*file?.txt[0]", "test\\*file\\?\\.txt\\[0]", true},
-		// Escape sequences that don't match
-		{"ab", "a\\*", false}, // Literal * doesn't match b
-		{"ab", "a\\?", false}, // Literal ? doesn't match b
-		{"ab", "a\\.", false}, // Literal . doesn't match b
-		{"ab", "a\\[", false}, // Literal [ doesn't match b
-
-		// --- Dot wildcard tests (matches non-whitespace characters) ---
-		{"a", ".", true},             // . matches single non-whitespace char
-		{"1", ".", true},             // . matches digit
-		{"_", ".", true},             // . matches underscore
-		{"-", ".", true},             // . matches hyphen
-		{"@", ".", true},             // . matches symbol
-		{"hello", "hell.", true},     // . at end matches 'o'
-		{"hello", ".ello", true},     // . at start matches 'h'
-		{"hello", "he.lo", true},     // . in middle matches 'l'
-		{"test123", "test...", true}, // Multiple . match multiple non-whitespace
-		// Dot should NOT match whitespace
-		{" ", ".", false},                     // . does not match space
-		{"\t", ".", false},                    // . does not match tab
-		{"\n", ".", false},                    // . does not match newline
-		{"\r", ".", false},                    // . does not match carriage return
-		{"hello world", "hello.world", false}, // . does not match space between words
-		{"a\tb", "a.b", false},                // . does not match tab
-		{"", ".", false},                      // . does not match empty (no char to match)
-		{"ab", ".", false},                    // . matches exactly one char, not two
-		// Mixed patterns with dot
-		{"file1.txt", "file.", false},     // . doesn't match '1' because string is longer
-		{"file1.txt", "file.*txt", true},  // . matches '1', * matches '.', txt matches 'txt'
-		{"user_name", "user.name", true},  // . matches '_'
-		{"user name", "user.name", false}, // . doesn't match ' '
-
-		// --- Greediness and backtracking cases ---
-		{"ababa", "a*a", true},           // * should match "bab"
-		{"abab", "a*b", true},            // * should match "ba"
-		{"aaab", "*ab", true},            // * should match "aa"
-		{"mississippi", "m*i*i", true},   // First * is "ississ", second * is ""
-		{"mississippi", "m*iss*i", true}, // First * is "", second * is "iss"
-		{"ab", "a*b", true},
-		{"aab", "a*b", true},
-		{"aaab", "a*b", true},
-
-		// --- Patterns ending in wildcards ---
-		{"abc", "abc*", true},
-		{"abcd", "abc?", true}, // ? requires exactly one more character
-		{"abc", "abc?", false}, // abc has 3 chars, abc? expects 4
-		{"abc", "abc.", false},
-		{"abc", "ab.", true},
-
-		// --- More failing cases ---
-		{"axbyc", "a.b-c", false},
-		{"axbyc", "a?b-c", false},
-		{"ab", "a.b", false},
-		{"a", "a.", false},
-	}
-
-	for i, c := range cases {
+	for i, c := range baseTestCases {
 		result, err := Match(c.pattern, c.s)
 		if err != nil {
 			t.Errorf("Test %d: Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
@@ -290,109 +415,13 @@ func TestMatchErrors(t *testing.T) {
 	}
 }
 
-// TestMatchFromByte validates byte slice matching with the same test cases
+// TestMatchFromByte validates byte slice matching using baseTestCases converted to bytes
 func TestMatchFromByte(t *testing.T) {
-	cases := []struct {
-		s       []byte
-		pattern []byte
-		result  bool
-	}{
-		{[]byte(""), []byte(""), true},
-		{[]byte(""), []byte("*"), true},
-		{[]byte(""), []byte("**"), true},
-		{[]byte(""), []byte("?"), false}, // ? requires exactly one character
-		{[]byte(""), []byte("."), false},
+	for i, c := range baseTestCases {
+		patternBytes := []byte(c.pattern)
+		sBytes := []byte(c.s)
 
-		{[]byte("a"), []byte(""), false},
-		{[]byte("a"), []byte("a"), true},
-		{[]byte("a"), []byte("*"), true},
-		{[]byte("a"), []byte("?"), true},
-		{[]byte("a"), []byte("."), true},
-
-		{[]byte("match the exact string"), []byte("match the exact string"), true},
-		{[]byte("do not match a different string"), []byte("this is a different string"), false},
-		{[]byte("match an emoji 😃"), []byte("match an emoji 😃"), true},
-
-		{[]byte("match a string with a *"), []byte("match a string *"), true},
-		{[]byte("match a string with a * at the beginning"), []byte("* at the beginning"), true},
-		{[]byte("match a string with two *"), []byte("match * with *"), true},
-
-		{[]byte("match a string with a ?"), []byte("match ? string with a ?"), true},
-		{[]byte("match a string with a ? at the beginning"), []byte("?atch a string with a ? at the beginning"), true},
-
-		{[]byte("match a string with a ."), []byte("match . string with a ."), true},
-		{[]byte("match a string with a . at the beginning"), []byte(".atch a string with a . at the beginning"), true},
-	}
-
-	for i, c := range cases {
-		result, err := Match(c.pattern, c.s)
-		if err != nil {
-			t.Errorf("Test %d: Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
-			continue
-		}
-		if c.result != result {
-			t.Errorf("Test %d: Expected `%v`, found `%v`; With Pattern: `%s` and String: `%s`", i+1, c.result, result, c.pattern, c.s)
-		}
-	}
-}
-
-// TestMatchByRune validates Unicode-aware rune matching
-func TestMatchByRune(t *testing.T) {
-	cases := []struct {
-		s       string
-		pattern string
-		result  bool
-	}{
-		{"", "", true},
-		{"", "*", true},
-		{"", "?", false}, // ? requires exactly one character
-		{"", ".", false},
-
-		{"a", "", false},
-		{"a", "a", true},
-		{"a", "*", true},
-		{"a", "?", true},
-		{"a", ".", true},
-
-		// Unicode and emoji test cases - important for rune matching
-		{"café", "café", true},
-		{"café", "caf?", true}, // ? matches 'é'
-		{"café", "ca*", true},
-		{"café", "c.f.", true},
-		{"🌟", "🌟", true},
-		{"🌟", "?", true},
-		{"🌟", "*", true},
-		{"🌟", ".", true},
-		{"🌟hello", "?hello", true},
-		{"🌟hello", "*hello", true},
-		{"🌟hello", ".hello", true},
-
-		// Complex Unicode sequences
-		{"🌅☕️📰", "🌅☕️📰", true},
-		{"🌅☕️📰", "🌅*", true},
-		{"🌅☕️📰", "*📰", true},
-		{"🌅☕️📰", "?☕️?", true},
-		{"🌅☕️📰", "....", true}, // 4 Unicode characters should need 4 dots
-
-		{"match an emoji 😃", "match an emoji ?", true},
-		{"match an emoji 😃", "match * emoji ?", true},
-		{"do not match because of different emoji 😃", "do not match because of different emoji 😄", false},
-
-		// --- Unicode characters mixed with wildcards ---
-		{"café", "caf?", true}, // ? matches 'é'
-		{"café", "caf.", true},
-		{"café", "c.f.", true},
-		{"你好世界", "你好*", true},
-		{"你好世界", "你好.界", true},
-		{"你好世界", "你好?界", true}, // ? matches '世'
-		{"你好世界", "*世界", true},
-		{"你好世界X", "你好世界?", true}, // ? matches 'X'
-		{"你好世界", "你好世界?", false}, // Missing character for ?
-		{"你好世界", "你好世界.", false},
-	}
-
-	for i, c := range cases {
-		result, err := Match([]rune(c.pattern), []rune(c.s))
+		result, err := Match(patternBytes, sBytes)
 		if err != nil {
 			t.Errorf("Test %d: Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
 			continue
@@ -463,7 +492,7 @@ func TestMatchEdgeCases(t *testing.T) {
 }
 
 // FuzzMatch provides fuzz testing for string matching robustness
-func FuzzMatchM(f *testing.F) {
+func FuzzMatch(f *testing.F) {
 	// Add seed corpus with known wildcard patterns
 	f.Add("*")
 	f.Add("?")
@@ -488,8 +517,10 @@ func FuzzMatchM(f *testing.F) {
 			// Skip these cases as they're expected to fail
 			t.Skipf("Invalid pattern %q: %v", pattern, err)
 		}
-		if !matched {
-			t.Fatalf("Pattern %q does not match itself", pattern)
+		// Only expect self-matching if the pattern contains no wildcards
+		hasWildcards := strings.ContainsAny(pattern, "*?.[\\")
+		if !hasWildcards && !matched {
+			t.Fatalf("Literal pattern %q does not match itself", pattern)
 		}
 
 		// Test 2: Property-based testing for wildcard behavior
@@ -539,7 +570,7 @@ func FuzzMatchM(f *testing.F) {
 
 			stringResult, stringErr := Match(pattern, testString)
 			byteResult, byteErr := Match(patternBytes, testBytes)
-			runeResult, runeErr := Match(patternRunes, testRunes)
+			runeResult, runeErr := Match(string(patternRunes), string(testRunes))
 
 			if (stringErr == nil) != (byteErr == nil) || (stringErr == nil) != (runeErr == nil) {
 				t.Errorf("Error consistency failed for pattern %q: string err=%v, byte err=%v, rune err=%v",
@@ -576,8 +607,10 @@ func FuzzMatchFromByte(f *testing.F) {
 			// Skip invalid patterns
 			t.Skipf("Invalid pattern %q: %v", s, err)
 		}
-		if !matched {
-			t.Fatalf("Byte pattern %q does not match itself", s)
+		// Only expect self-matching if the pattern contains no wildcards
+		hasWildcards := strings.ContainsAny(s, "*?.[\\")
+		if !hasWildcards && !matched {
+			t.Fatalf("Literal byte pattern %q does not match itself", s)
 		}
 
 		// Test 2: Consistency with string version
@@ -617,38 +650,36 @@ func FuzzMatchByRune(f *testing.F) {
 		runes := []rune(s)
 
 		// Test 1: Self-matching
-		matched, err := Match(runes, runes)
+		matched, err := Match(s, s)
 		if err != nil {
 			// Skip invalid patterns
 			t.Skipf("Invalid pattern %q: %v", s, err)
 		}
-		if !matched {
-			t.Fatalf("Rune pattern %q does not match itself", s)
+		// Only expect self-matching if the pattern contains no wildcards
+		hasWildcards := strings.ContainsAny(s, "*?.[\\")
+		if !hasWildcards && !matched {
+			t.Fatalf("Literal rune pattern %q does not match itself", s)
 		}
 
 		// Test 2: Unicode handling verification
 		if len(runes) > 0 {
 			// Test that rune matching properly handles multi-byte characters
 			for i, r := range runes {
-				singleRune := []rune{r}
-				questionPattern := []rune("?")
-
 				if r != '*' && r != '?' && r != '.' && r != '[' && r != '\\' {
 					// Non-wildcard character should match itself with ?
-					if matched, err := Match(questionPattern, singleRune); err != nil || !matched {
+					if matched, err := Match("?", string(r)); err != nil || !matched {
 						t.Errorf("Pattern '?' should match rune %q at position %d, got %v, err: %v",
 							string(r), i, matched, err)
 					}
 
 					// Test . wildcard with Unicode spaces
-					dotPattern := []rune(".")
 					if r == ' ' || r == '\t' || r == '\n' || r == '\u00A0' { // Various Unicode spaces
-						if matched, err := Match(dotPattern, singleRune); err != nil || matched {
+						if matched, err := Match(".", string(r)); err != nil || matched {
 							t.Errorf("Pattern '.' should not match whitespace rune %q, got %v, err: %v",
 								string(r), matched, err)
 						}
 					} else {
-						if matched, err := Match(dotPattern, singleRune); err != nil || !matched {
+						if matched, err := Match(".", string(r)); err != nil || !matched {
 							t.Errorf("Pattern '.' should match non-whitespace rune %q, got %v, err: %v",
 								string(r), matched, err)
 						}
@@ -788,7 +819,7 @@ func FuzzMatchEdgeCases(f *testing.F) {
 			if strings.Contains(input, "测试") || strings.Contains(input, "🌟") {
 				// Verify that byte and rune versions handle Unicode consistently
 				if !strings.ContainsAny(pattern, "\\") {
-					runeMatched, runeErr := Match([]rune(pattern), []rune(input))
+					runeMatched, runeErr := Match(pattern, input)
 					if (err == nil) != (runeErr == nil) {
 						t.Errorf("Unicode consistency: pattern %q, input %q - string err=%v, rune err=%v",
 							pattern, input, err, runeErr)
@@ -798,6 +829,166 @@ func FuzzMatchEdgeCases(f *testing.F) {
 							pattern, input, matched, runeMatched)
 					}
 				}
+			}
+		}
+	})
+}
+
+// TestMatchFold validates case-insensitive matching with specific case-insensitive test cases
+func TestMatchFoldString(t *testing.T) {
+	// Test 1: First run all baseTestCases - they should work the same in case-insensitive mode
+	for i, c := range baseTestCases {
+		result, err := MatchFold(c.pattern, c.s)
+		if err != nil {
+			t.Errorf("Test %d (base): Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
+			continue
+		}
+		if c.result != result {
+			t.Errorf("Test %d (base): Expected `%v`, found `%v`; With Pattern: `%s` and String: `%s`", i+1, c.result, result, c.pattern, c.s)
+		}
+	}
+
+	// Test 2: Case-insensitive specific test cases using global caseFoldCases
+
+	for i, c := range caseFoldCases {
+		result, err := MatchFold(c.pattern, c.s)
+		if err != nil {
+			t.Errorf("CaseFold Test %d: Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
+			continue
+		}
+		if c.result != result {
+			t.Errorf("CaseFold Test %d: Expected `%v`, found `%v`; With Pattern: `%s` and String: `%s`", i+1, c.result, result, c.pattern, c.s)
+		}
+	}
+}
+
+// TestMatchFold validates case-insensitive byte slice matching with specific test cases
+func TestMatchFoldByte(t *testing.T) {
+	// Test 1: First run all baseTestCases converted to bytes - they should work the same
+	for i, c := range baseTestCases {
+		patternBytes := []byte(c.pattern)
+		sBytes := []byte(c.s)
+
+		result, err := MatchFold(patternBytes, sBytes)
+		if err != nil {
+			t.Errorf("Test %d (base): Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
+			continue
+		}
+		if c.result != result {
+			t.Errorf("Test %d (base): Expected `%v`, found `%v`; With Pattern: `%s` and String: `%s`", i+1, c.result, result, c.pattern, c.s)
+		}
+	}
+
+	// Test 2: Case-insensitive specific test cases using global caseFoldCases converted to bytes
+
+	for i, c := range caseFoldCases {
+		patternBytes := []byte(c.pattern)
+		sBytes := []byte(c.s)
+
+		result, err := MatchFold(patternBytes, sBytes)
+		if err != nil {
+			t.Errorf("CaseFold Test %d: Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
+			continue
+		}
+		if c.result != result {
+			t.Errorf("CaseFold Test %d: Expected `%v`, found `%v`; With Pattern: `%s` and String: `%s`", i+1, c.result, result, c.pattern, c.s)
+		}
+	}
+}
+
+// FuzzMatchFold provides fuzz testing for case-insensitive matching
+func FuzzMatchFold(f *testing.F) {
+	// Add seed corpus for case-insensitive patterns
+	f.Add("HELLO*")
+	f.Add("Test?")
+	f.Add("FILE.TXT")
+	f.Add("[A-Z]")
+	f.Add("café*")
+	f.Add("PATTERN.*")
+	f.Add("*")
+	f.Add("?")
+	f.Add(".")
+
+	f.Fuzz(func(t *testing.T, pattern string) {
+		// Test 1: Self-matching (case-insensitive)
+		matched, err := MatchFold(pattern, pattern)
+		if err != nil {
+			t.Skipf("Invalid pattern %q: %v", pattern, err)
+		}
+
+		// Only expect self-matching if the pattern contains no wildcards
+		hasWildcards := strings.ContainsAny(pattern, "*?.[\\")
+		if !hasWildcards && !matched {
+			t.Fatalf("Literal pattern %q does not match itself case-insensitively", pattern)
+		}
+
+		// Test 2: Case-insensitive property testing
+		if len(pattern) > 0 {
+			// Test case variations
+			upperPattern := strings.ToUpper(pattern)
+			lowerPattern := strings.ToLower(pattern)
+
+			// Pattern should match both upper and lower case versions of itself
+			if !strings.ContainsAny(pattern, "\\[") { // Skip complex patterns for this test
+				if matched, err := MatchFold(pattern, upperPattern); err == nil && !matched {
+					t.Errorf("Pattern %q should match its uppercase version %q", pattern, upperPattern)
+				}
+				if matched, err := MatchFold(pattern, lowerPattern); err == nil && !matched {
+					t.Errorf("Pattern %q should match its lowercase version %q", pattern, lowerPattern)
+				}
+			}
+
+			// Test specific wildcard behaviors case-insensitively
+			if pattern == "*" {
+				testStrings := []string{"", "HELLO", "hello", "Hello", "测试", "ТЕСТ"}
+				for _, s := range testStrings {
+					if matched, err := MatchFold(pattern, s); err != nil || !matched {
+						t.Errorf("Pattern '*' should match %q case-insensitively, got %v, err: %v", s, matched, err)
+					}
+				}
+			}
+
+			// Test question mark behavior case-insensitively
+			if pattern == "?" {
+				// ? should match any single character case-insensitively
+				if matched, err := MatchFold(pattern, "A"); err != nil || !matched {
+					t.Errorf("Pattern '?' should match single char 'A', got %v, err: %v", matched, err)
+				}
+				if matched, err := MatchFold(pattern, "Ab"); err != nil || matched {
+					t.Errorf("Pattern '?' should not match 'Ab', got %v, err: %v", matched, err)
+				}
+			}
+
+			// Test dot wildcard (non-whitespace only) case-insensitively
+			if pattern == "." {
+				// . should match non-whitespace characters case-insensitively
+				if matched, err := MatchFold(pattern, "A"); err != nil || !matched {
+					t.Errorf("Pattern '.' should match 'A', got %v, err: %v", matched, err)
+				}
+				if matched, err := MatchFold(pattern, " "); err != nil || matched {
+					t.Errorf("Pattern '.' should not match space, got %v, err: %v", matched, err)
+				}
+			}
+		}
+
+		// Test 3: Type consistency for case-insensitive matching
+		if !strings.ContainsAny(pattern, "\\") {
+			patternBytes := []byte(pattern)
+
+			testString := "TEST"
+			testBytes := []byte(testString)
+
+			stringResult, stringErr := MatchFold(pattern, testString)
+			byteResult, byteErr := MatchFold(patternBytes, testBytes)
+
+			if (stringErr == nil) != (byteErr == nil) {
+				t.Errorf("Error consistency failed for pattern %q: string err=%v, byte err=%v",
+					pattern, stringErr, byteErr)
+			}
+
+			if stringErr == nil && stringResult != byteResult {
+				t.Errorf("String/byte result mismatch for pattern %q: string=%v, byte=%v",
+					pattern, stringResult, byteResult)
 			}
 		}
 	})

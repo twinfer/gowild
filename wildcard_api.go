@@ -23,6 +23,9 @@
 package gowild
 
 import (
+	"bytes"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/twinfer/gowild/internal/wildcard"
@@ -33,9 +36,8 @@ var ErrBadPattern = wildcard.ErrBadPattern
 
 // Match returns true if the pattern matches the input data. It supports three types:
 //
-//   - string: Fast byte-wise matching optimized for ASCII strings
+//   - string: Zero-allocation Fast string matching support ASCII & Unicode strings
 //   - []byte: Zero-allocation matching for byte slices
-//   - []rune: Unicode-aware matching for multi-byte characters
 //
 // The function automatically selects the optimal matching strategy based on the input type.
 // For ASCII strings, it uses fast byte-wise operations. For Unicode strings, use []rune type
@@ -45,8 +47,8 @@ var ErrBadPattern = wildcard.ErrBadPattern
 //
 //	Match("hello*", "hello world")           // string matching
 //	Match([]byte("*.txt"), []byte("file.txt")) // byte slice matching
-//	Match([]rune("café*"), []rune("café au lait")) // Unicode matching
-func Match[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
+//	Match("café*", "café au lait") // Unicode matching
+func Match[T ~string | ~[]byte](pattern, s T) (bool, error) {
 	// Handle  "empty Pattren" case
 	if len(pattern) == 0 {
 		if len(s) == 0 {
@@ -55,27 +57,62 @@ func Match[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 			return false, nil
 		}
 	}
-	// Delegate everything else to internal function
-	return wildcard.Match(pattern, s)
+
+	if pStr, ok := any(pattern).(string); ok {
+		str := any(s).(string)
+
+		// single "*" wildcard
+		if pStr == "*" {
+			return true, nil
+		}
+
+		// if there are no wildcards, do a direct comparison
+		if !strings.ContainsFunc(pStr, wildcard.IsWildcard) {
+			return pStr == str, nil
+		}
+
+		// Use matchString
+		return wildcard.Match(pStr, str)
+
+	}
+
+	if pBytes, ok := any(pattern).([]byte); ok {
+		sBytes := any(s).([]byte)
+
+		// if there are no wildcards, do a direct comparison
+		if !bytes.ContainsFunc(pBytes, wildcard.IsWildcard) {
+			return bytes.Equal(pBytes, sBytes), nil
+		}
+		// single "*" wildcard
+		if len(pBytes) == 1 && pBytes[0] == '*' {
+			return true, nil
+		}
+
+		// Use iterative algorithm for better performance
+		return wildcard.Match(pBytes, sBytes)
+
+	}
+
+	// This should not be reachable due to type constraints
+	return false, fmt.Errorf("unsupported type: %T", pattern)
 }
 
 // MatchFold returns true if the pattern matches the input data with Case-insensitive
-// comparison. Like Match, it supports three types with automatic optimization:
+// comparison. It supports two types with automatic optimization:
 //
-//   - string: Fast case-insensitive matching for ASCII strings
+//   - string: Fast case-insensitive matching for ASCII and Unicode strings
 //   - []byte: Zero-allocation case-insensitive matching for byte slices
-//   - []rune: Unicode-aware case-insensitive matching
 //
-// For ASCII strings, it uses optimized case-folding. For proper Unicode case-insensitive
-// matching, use []rune type.
+// Both string and []byte types properly handle Unicode case-insensitive matching
+// by decoding UTF-8 characters as needed.
 //
 // Examples:
 //
 //	MatchFold("HELLO*", "hello world")           // ASCII case-insensitive
-//	MatchFold([]rune("CAFÉ*"), []rune("café au lait")) // Unicode case-insensitive
-func MatchFold[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
+//	MatchFold("CAFÉ*", "café au lait")           // Unicode case-insensitive
+func MatchFold[T ~string | ~[]byte](pattern, s T) (bool, error) {
 
-	// Handle  "empty Pattren" case
+	// Handle empty pattern case
 	if len(pattern) == 0 {
 		if len(s) == 0 {
 			return true, nil
@@ -83,8 +120,44 @@ func MatchFold[T ~string | ~[]byte | ~[]rune](pattern, s T) (bool, error) {
 			return false, nil
 		}
 	}
-	// Delegate everything else to internal function
-	return wildcard.MatchFold(pattern, s)
+
+	if pStr, ok := any(pattern).(string); ok {
+		str := any(s).(string)
+
+		// single "*" wildcard
+		if pStr == "*" {
+			return true, nil
+		}
+
+		// if there are no wildcards, do a direct comparison
+		// if !strings.ContainsFunc(pStr, wildcard.IsWildcard) {
+		// 	return strings.EqualFold(pStr, str), nil
+		// }
+
+		// Use MatchFoldString
+		return wildcard.MatchFold(pStr, str)
+
+	}
+
+	if pBytes, ok := any(pattern).([]byte); ok {
+		sBytes := any(s).([]byte)
+
+		// if there are no wildcards, do a direct comparison
+		if !bytes.ContainsFunc(pBytes, wildcard.IsWildcard) {
+			return bytes.EqualFold(pBytes, sBytes), nil
+		}
+		// single "*" wildcard
+		if len(pBytes) == 1 && pBytes[0] == '*' {
+			return true, nil
+		}
+
+		// Use MatchFoldBytes
+		return wildcard.MatchFold(pBytes, sBytes)
+
+	}
+
+	// This should not be reachable due to type constraints
+	return false, fmt.Errorf("unsupported type: %T", pattern)
 }
 
 // MatchMultiple concurrently matches a single input against multiple patterns(case ensitive).
