@@ -197,7 +197,7 @@ func matchWithOptions[T ~string | ~[]byte](pattern, s T, fold bool) (bool, error
 		}
 
 		// if there are no wildcards, do a direct comparison
-		if !strings.ContainsFunc(pStr, wildcard.IsWildcard) {
+		if !strings.ContainsAny(pStr, wildcard.WildcardChars) {
 			if fold {
 				return strings.EqualFold(pStr, str), nil
 			} else {
@@ -218,7 +218,7 @@ func matchWithOptions[T ~string | ~[]byte](pattern, s T, fold bool) (bool, error
 		}
 
 		// if there are no wildcards, do a direct comparison
-		if !bytes.ContainsFunc(pBytes, wildcard.IsWildcard) {
+		if !bytes.ContainsAny(pBytes, wildcard.WildcardChars) {
 			if fold {
 				return bytes.EqualFold(pBytes, sBytes), nil
 			} else {
