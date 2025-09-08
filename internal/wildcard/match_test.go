@@ -204,8 +204,8 @@ var baseTestCases = []struct {
 	{"ab", "a\\.", false}, // Literal . doesn't match b
 	{"ab", "a\\[", false}, // Literal [ doesn't match b
 
-	// --- Dot wildcard tests (matches non-whitespace characters) ---
-	{"a", ".", true},             // . matches single non-whitespace char
+	// --- Dot wildcard tests (matches any character except newline) ---
+	{"a", ".", true},             // . matches single character
 	{"1", ".", true},             // . matches digit
 	{"_", ".", true},             // . matches underscore
 	{"-", ".", true},             // . matches hyphen
@@ -213,21 +213,21 @@ var baseTestCases = []struct {
 	{"hello", "hell.", true},     // . at end matches 'o'
 	{"hello", ".ello", true},     // . at start matches 'h'
 	{"hello", "he.lo", true},     // . in middle matches 'l'
-	{"test123", "test...", true}, // Multiple . match multiple non-whitespace
-	// Dot should NOT match whitespace
-	{" ", ".", false},                     // . does not match space
-	{"\t", ".", false},                    // . does not match tab
-	{"\n", ".", false},                    // . does not match newline
-	{"\r", ".", false},                    // . does not match carriage return
-	{"hello world", "hello.world", false}, // . does not match space between words
-	{"a\tb", "a.b", false},                // . does not match tab
-	{"", ".", false},                      // . does not match empty (no char to match)
-	{"ab", ".", false},                    // . matches exactly one char, not two
+	{"test123", "test...", true}, // Multiple . match multiple characters
+	// Dot should match any character except newline
+	{" ", ".", true},                     // . matches space
+	{"\t", ".", true},                    // . matches tab
+	{"\n", ".", false},                   // . does not match newline
+	{"\r", ".", true},                    // . matches carriage return
+	{"hello world", "hello.world", true}, // . matches space between words
+	{"a\tb", "a.b", true},                // . matches tab
+	{"", ".", false},                     // . does not match empty (no char to match)
+	{"ab", ".", false},                   // . matches exactly one char, not two
 	// Mixed patterns with dot
-	{"file1.txt", "file.", false},     // . doesn't match '1' because string is longer
-	{"file1.txt", "file.*txt", true},  // . matches '1', * matches '.', txt matches 'txt'
-	{"user_name", "user.name", true},  // . matches '_'
-	{"user name", "user.name", false}, // . doesn't match ' '
+	{"file1.txt", "file.", false},    // . doesn't match '1' because string is longer
+	{"file1.txt", "file.*txt", true}, // . matches '1', * matches '.', txt matches 'txt'
+	{"user_name", "user.name", true}, // . matches '_'
+	{"user name", "user.name", true}, // . matches ' '
 
 	// --- Greediness and backtracking cases ---
 	{"ababa", "a*a", true},           // * should match "bab"
@@ -318,14 +318,14 @@ var caseFoldCases = []struct {
 	{"BAT", "?at", true},
 	{"CUTS", "c?ts", true},
 
-	// Case-insensitive with . wildcard (non-whitespace only)
+	// Case-insensitive with . wildcard (any character except newline)
 	{"HELLO", "hell.", true},
 	{"HELLO", ".ello", true},
 	{"Hello", "he.lo", true},
 	{"TEST123", "test...", true},
 	{"ABC", "a.c", true},
 	{"axc", "A.C", true},
-	{"A C", "a.c", false}, // . doesn't match space
+	{"A C", "a.c", true}, // . matches space
 
 	// Unicode case-insensitive
 	{"CAFÉ", "café", true},
@@ -547,14 +547,17 @@ func FuzzMatchM(f *testing.F) {
 				}
 			}
 
-			// Test dot wildcard (non-whitespace only)
+			// Test dot wildcard (any character except newline)
 			if pattern == "." {
-				// . should match non-whitespace characters
+				// . should match any character except newline
 				if matched, err := MatchInternal(pattern, "a", false); err != nil || !matched {
 					t.Errorf("Pattern '.' should match 'a', got %v, err: %v", matched, err)
 				}
-				if matched, err := MatchInternal(pattern, " ", false); err != nil || matched {
-					t.Errorf("Pattern '.' should not match space, got %v, err: %v", matched, err)
+				if matched, err := MatchInternal(pattern, " ", false); err != nil || !matched {
+					t.Errorf("Pattern '.' should match space, got %v, err: %v", matched, err)
+				}
+				if matched, err := MatchInternal(pattern, "\n", false); err != nil || matched {
+					t.Errorf("Pattern '.' should not match newline, got %v, err: %v", matched, err)
 				}
 			}
 		}
@@ -672,15 +675,15 @@ func FuzzMatchByRune(f *testing.F) {
 							string(r), i, matched, err)
 					}
 
-					// Test . wildcard with Unicode spaces
-					if r == ' ' || r == '\t' || r == '\n' || r == '\u00A0' { // Various Unicode spaces
+					// Test . wildcard with Unicode characters (only exclude newlines)
+					if r == '\n' { // Only newline should not match
 						if matched, err := MatchInternal(".", string(r), false); err != nil || matched {
-							t.Errorf("Pattern '.' should not match whitespace rune %q, got %v, err: %v",
+							t.Errorf("Pattern '.' should not match newline rune %q, got %v, err: %v",
 								string(r), matched, err)
 						}
 					} else {
 						if matched, err := MatchInternal(".", string(r), false); err != nil || !matched {
-							t.Errorf("Pattern '.' should match non-whitespace rune %q, got %v, err: %v",
+							t.Errorf("Pattern '.' should match rune %q, got %v, err: %v",
 								string(r), matched, err)
 						}
 					}
@@ -707,8 +710,6 @@ func FuzzMatchNegative(f *testing.F) {
 	f.Add("exact", "different")
 	f.Add("?", "")   // ? should not match empty
 	f.Add("?", "ab") // ? should not match multiple chars
-	f.Add(".", " ")  // . should not match space
-	f.Add(".", "\t") // . should not match tab
 	f.Add(".", "\n") // . should not match newline
 	f.Add("prefix*", "other")
 	f.Add("[abc]", "d")
@@ -724,10 +725,10 @@ func FuzzMatchNegative(f *testing.F) {
 
 		// Property-based negative testing
 		if len(pattern) > 0 && len(input) > 0 {
-			// Test that . wildcard does not match whitespace
-			if pattern == "." && (input == " " || input == "\t" || input == "\n") {
+			// Test that . wildcard does not match newlines
+			if pattern == "." && input == "\n" {
 				if matched {
-					t.Errorf("Pattern '.' should not match whitespace %q", input)
+					t.Errorf("Pattern '.' should not match newline %q", input)
 				}
 			}
 
@@ -959,14 +960,17 @@ func FuzzMatchFold(f *testing.F) {
 				}
 			}
 
-			// Test dot wildcard (non-whitespace only) case-insensitively
+			// Test dot wildcard (any character except newline) case-insensitively
 			if pattern == "." {
-				// . should match non-whitespace characters case-insensitively
+				// . should match any character except newline case-insensitively
 				if matched, err := MatchInternal(pattern, "A", true); err != nil || !matched {
 					t.Errorf("Pattern '.' should match 'A', got %v, err: %v", matched, err)
 				}
-				if matched, err := MatchInternal(pattern, " ", true); err != nil || matched {
-					t.Errorf("Pattern '.' should not match space, got %v, err: %v", matched, err)
+				if matched, err := MatchInternal(pattern, " ", true); err != nil || !matched {
+					t.Errorf("Pattern '.' should match space, got %v, err: %v", matched, err)
+				}
+				if matched, err := MatchInternal(pattern, "\n", true); err != nil || matched {
+					t.Errorf("Pattern '.' should not match newline, got %v, err: %v", matched, err)
 				}
 			}
 		}

@@ -15,7 +15,7 @@
 //
 //   - `*`: Matches any sequence of characters (including zero characters)
 //   - `?`: Matches zero or one character (any character)
-//   - `.`: Matches exactly one non-whitespace character
+//   - `.`: Matches any single character except newline
 //   - `[abc]`: Matches any character in the set (a, b, or c)
 //   - `[!abc]` or `[^abc]`: Matches any character not in the set
 //   - `[a-z]`: Matches any character in the range a to z

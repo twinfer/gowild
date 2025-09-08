@@ -240,7 +240,7 @@ func equalFoldRune(r1, r2 rune) bool {
 // The algorithm supports:
 //   - `*`: Matches any sequence of characters (greedy with backtracking)
 //   - `?`: Matches zero or one character (with backtracking for both options)
-//   - `.`: Matches exactly one non-whitespace character
+//   - `.`: Matches any single character except newline
 //   - `[abc]`: Character classes (always case-sensitive)
 //   - `\x`: Escape sequences for literal characters
 //
@@ -282,13 +282,13 @@ func MatchInternal[T ~string | ~[]byte](pattern, s T, fold bool) (bool, error) {
 			return true, nil
 		}
 
-		// Case 1: `*` wildcard. Optimize consecutive stars and save state.
+		// Case 1: `*` wildcard. Optimize consecutive stars and absorb ? wildcards.
 		if pIdx < pLen && pattern[pIdx] == wildcardStar {
-			// Skip all consecutive * wildcards - they're equivalent to a single *
-			for pIdx < pLen && pattern[pIdx] == wildcardStar {
+			// Skip all consecutive * and ? wildcards - * absorbs ? capabilities
+			for pIdx < pLen && (pattern[pIdx] == wildcardStar || pattern[pIdx] == wildcardQuestion) {
 				pIdx++
 			}
-			// Save the position after all consecutive * for backtracking
+			// Save the position after all absorbed wildcards for backtracking
 			starIdx = pIdx
 			sTmpIdx = sIdx
 			continue
@@ -383,7 +383,7 @@ func MatchInternal[T ~string | ~[]byte](pattern, s T, fold bool) (bool, error) {
 			}
 			// Escaped character doesn't match, fall through to backtrack
 		} else if pIdx < pLen && pattern[pIdx] == wildcardDot {
-			// `.` matches exactly one non-whitespace character with proper UTF-8 decoding
+			// `.` matches any single character except newline with proper UTF-8 decoding
 			if sIdx >= sLen {
 				// No character available, fall through to backtrack
 			} else {
@@ -396,8 +396,8 @@ func MatchInternal[T ~string | ~[]byte](pattern, s T, fold bool) (bool, error) {
 					sRune, sRuneWidth = utf8.DecodeRune(sBytes[sIdx:])
 				}
 
-				if unicode.IsSpace(sRune) {
-					// Character is whitespace, fall through to backtrack
+				if sRune == '\n' {
+					// Character is newline, fall through to backtrack
 				} else {
 					pIdx++
 					sIdx += sRuneWidth
