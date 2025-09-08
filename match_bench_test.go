@@ -1,42 +1,75 @@
 package gowild
 
-import "testing"
+import (
+	"path/filepath"
+	"regexp"
+	"testing"
+)
 
-// BenchmarkPatterns tests the performance of  pattern matching
-func BenchmarkPatterns(b *testing.B) {
-	testCases := []struct {
-		name    string
-		pattern string
-		text    string
-	}{
-		// Single character patterns  with IndexByte
-		{"Single char *x", "*x", "this is a test with x at the end"},
-		{"Single char x*", "x*", "x marks the spot for treasure hunting"},
+// Global test cases for fair comparison across all implementations
+var commonTestCases = []struct {
+	name    string
+	pattern string
+	text    string
+	regex   string // Equivalent regex pattern
+}{
+	{
+		name:    "Simple Suffix",
+		pattern: "*.txt",
+		text:    "document.txt",
+		regex:   `.*\.txt$`,
+	},
+	{
+		name:    "Simple Prefix",
+		pattern: "test*",
+		text:    "test_file.go",
+		regex:   `^test.*`,
+	},
+	{
+		name:    "Contains Pattern",
+		pattern: "*user*",
+		text:    "get_user_data",
+		regex:   `.*user.*`,
+	},
+	{
+		name:    "Complex Multi-Wildcard",
+		pattern: "*test*file*",
+		text:    "my_test_config_file.json",
+		regex:   `.*test.*file.*`,
+	},
+	{
+		name:    "Question Mark Pattern",
+		pattern: "file?.txt",
+		text:    "file1.txt",
+		regex:   `^file.?\.txt$`,
+	},
+	{
+		name:    "Character Class",
+		pattern: "[a-z]*.log",
+		text:    "server.log",
+		regex:   `^[a-z].*\.log$`,
+	},
+	{
+		name:    "Needle in Haystack",
+		pattern: "*important*file[0-9]?.log",
+		text:    "this is a very long log entry with lots of text and data before we find the important_config_file3.log entry that we are searching for in this haystack of information",
+		regex:   `.*important.*file[0-9].?\.log`,
+	},
+}
 
-		// Suffix patterns  with LastIndex
-		{"Star suffix short", "*test", "this is a test"},
-		{"Star suffix long", "*optimization", "this is a much longer string that ends with optimization"},
+// Pre-compiled regex patterns for performance comparison
+var compiledRegexes = make([]*regexp.Regexp, len(commonTestCases))
 
-		// Contains patterns  with Contains
-		{"Contains short", "*test*", "this test is good"},
-		{"Contains long", "*optimization*", "the performance optimization here is excellent"},
-
-		// Multi-segment patterns using bidirectional search
-		{"Two segments", "hello*world", "hello beautiful world"},
-		{"Three segments", "start*middle*end", "start of the middle section leads to end"},
-		{"Four segments", "a*b*c*d", "a very long string with b in the middle and c near the d"},
-
-		// Complex patterns that should benefit from reverse matching
-		{"Reverse terminal", "*suffix.txt", "a very long filename that ends with suffix.txt"},
-		{"Complex reverse", "*final*result", "this is the final answer and result"},
-
-		// Case-insensitive
-		{"Case fold prefix", "HELLO*", "hello world"},
-		{"Case fold suffix", "*WORLD", "hello world"},
-		{"Case fold contains", "*TEST*", "this test works"},
+func init() {
+	// Pre-compile all regex patterns
+	for i, tc := range commonTestCases {
+		compiledRegexes[i] = regexp.MustCompile(tc.regex)
 	}
+}
 
-	for _, tc := range testCases {
+// BenchmarkGoWild tests gowild performance on common patterns
+func BenchmarkGoWild(b *testing.B) {
+	for _, tc := range commonTestCases {
 		b.Run(tc.name, func(b *testing.B) {
 			for b.Loop() {
 				Match(tc.pattern, tc.text) // Ignoring error for benchmark
@@ -45,83 +78,35 @@ func BenchmarkPatterns(b *testing.B) {
 	}
 }
 
-// BenchmarkBytes tests  specific to byte slice operations
-func BenchmarkBytes(b *testing.B) {
-	testCases := []struct {
-		name    string
-		pattern string
-		text    string
-	}{
-		// IndexByte vs IndexFunc comparison
-		{"Bytes single char *x", "*x", "this is a test with x at the end"},
-		{"Bytes star suffix", "*bytes", " for bytes"},
-		{"Bytes contains", "*optimize*", "bytes optimize performance"},
-		{"Bytes multi-segment", "start*middle*end", "start of middle leads to end"},
-	}
-
-	for _, tc := range testCases {
+// BenchmarkFilepath tests path/filepath.Match performance on common patterns
+func BenchmarkFilepath(b *testing.B) {
+	for _, tc := range commonTestCases {
 		b.Run(tc.name, func(b *testing.B) {
-			pattern := []byte(tc.pattern)
-			text := []byte(tc.text)
 			for b.Loop() {
-				Match(pattern, text) // Ignoring error for benchmark
+				filepath.Match(tc.pattern, tc.text) // Ignoring error for benchmark
 			}
 		})
 	}
 }
 
-// BenchmarkCaseFold tests case-insensitive
-func BenchmarkCaseFold(b *testing.B) {
-	testCases := []struct {
-		name    string
-		pattern string
-		text    string
-	}{
-		// Direct EqualFold vs ToLower+Match
-		{"Fold no wildcards", "HELLO", "hello"},
-		{"Fold prefix star", "HELLO*", "hello world"},
-		{"Fold star suffix", "*WORLD", "hello world"},
-		{"Fold contains", "*TEST*", "this test works"},
-		{"Fold complex", "START*middle*END", "start of middle leads to end"},
-	}
-
-	for _, tc := range testCases {
-		b.Run(tc.name+" String", func(b *testing.B) {
+// BenchmarkRegexCompiled tests pre-compiled regex performance on common patterns
+func BenchmarkRegexCompiled(b *testing.B) {
+	for i, tc := range commonTestCases {
+		b.Run(tc.name, func(b *testing.B) {
+			regex := compiledRegexes[i]
 			for b.Loop() {
-				MatchFold(tc.pattern, tc.text) // Ignoring error for benchmark
-			}
-		})
-
-		b.Run(tc.name+" Bytes", func(b *testing.B) {
-			pattern := []byte(tc.pattern)
-			text := []byte(tc.text)
-			for b.Loop() {
-				MatchFold(pattern, text) // Ignoring error for benchmark
+				regex.MatchString(tc.text)
 			}
 		})
 	}
 }
 
-// BenchmarkReverseMatching specifically tests reverse matching
-func BenchmarkReverseMatching(b *testing.B) {
-	// Create test strings of different lengths to show reverse matching benefits
-	longString := "this is a very long string that should benefit from reverse matching when the pattern ends in a specific suffix"
-
-	testCases := []struct {
-		name    string
-		pattern string
-		text    string
-	}{
-		{"Reverse short", "*suffix", "test suffix"},
-		{"Reverse medium", "*matching", "this requires reverse matching"},
-		{"Reverse long", "*suffix", longString},
-		{"Reverse very long", "*optimization", longString + " optimization"},
-	}
-
-	for _, tc := range testCases {
+// BenchmarkRegexNotCompiled tests regex compilation + matching performance on common patterns
+func BenchmarkRegexNotCompiled(b *testing.B) {
+	for _, tc := range commonTestCases {
 		b.Run(tc.name, func(b *testing.B) {
 			for b.Loop() {
-				Match(tc.pattern, tc.text) // Ignoring error for benchmark
+				regexp.MatchString(tc.regex, tc.text) // Compiles regex each time
 			}
 		})
 	}
