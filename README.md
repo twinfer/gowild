@@ -36,7 +36,7 @@
    * `go-wildcard`: This is a popular third-party library for general-purpose wildcard matching. It's known for being fast and feature-rich. It supports ** for matching across directory separators,
      making it a good choice for filesystem-aware matching beyond single path components.
 
-   * `gowild` (this project): This library is also designed for high-performance, general-purpose string matching. Its key differentiators are the specific behaviors of its wildcards and its focus on
+   * `gowild` (this project): This library is designed for high-performance, general-purpose string matching. Its key differentiators are the specific behaviors of its wildcards and its focus on
      a highly optimized, unified matching algorithm.
 
   Feature Comparison
@@ -58,7 +58,6 @@
   Summary
 
    * Use `path/filepath.Match` when you need to match file paths in a way that is consistent with shell globbing, and you don't want wildcards to cross directory boundaries.
-   * Use `go-wildcard` when you need a flexible, general-purpose wildcard library, especially if you need to match across path separators with **.
    * Use `gowild` when you need a high-performance, general-purpose library with the specific wildcard semantics it provides (? as optional, . excludes newlines), and you don't need special handling
      for path separators.
 

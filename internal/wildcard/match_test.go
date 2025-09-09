@@ -261,41 +261,7 @@ var baseTestCases = []struct {
 	{"ab", "a.b", false},
 	{"a", "a.", false},
 
-	// Unicode and emoji test cases - important for rune matching
-	{"café", "café", true},
-	{"café", "caf?", true}, // ? matches 'é'
-	{"café", "ca*", true},
-	{"café", "c.f.", true},
-	{"🌟", "🌟", true},
-	{"🌟", "?", true},
-	{"🌟", "*", true},
-	{"🌟", ".", true},
-	{"🌟hello", "?hello", true},
-	{"🌟hello", "*hello", true},
-	{"🌟hello", ".hello", true},
-
-	// Complex Unicode sequences
-	{"🌅☕️📰", "🌅☕️📰", true},
-	{"🌅☕️📰", "🌅*", true},
-	{"🌅☕️📰", "*📰", true},
-	{"🌅☕️📰", "?☕️?", true},
-	{"🌅☕️📰", "....", true}, // 4 Unicode characters should need 4 dots
-
-	{"match an emoji 😃", "match an emoji ?", true},
-	{"match an emoji 😃", "match * emoji ?", true},
-	{"do not match because of different emoji 😃", "do not match because of different emoji 😄", false},
-
-	// --- Unicode characters mixed with wildcards ---
-	{"café", "caf?", true}, // ? matches 'é'
-	{"café", "caf.", true},
-	{"café", "c.f.", true},
-	{"你好世界", "你好*", true},
-	{"你好世界", "你好.界", true},
-	{"你好世界", "你好?界", true}, // ? matches '世'
-	{"你好世界", "*世界", true},
-	{"你好世界X", "你好世界?", true}, // ? matches 'X'
-	{"你好世界", "你好世界?", true},  // 你好世界? can match: 你好世界 matches '你好世界', ? matches zero
-	{"你好世界", "你好世界.", false},
+	{"a", "a?", true}, // a? can match: a matches 'a', ? matches zero
 }
 
 // caseFoldCases contains test cases specifically for case-insensitive matching
@@ -375,6 +341,42 @@ var caseFoldCases = []struct {
 	{"testXYZ", "TEST[a-z]*", false}, // Pattern matching is case-insensitive, but [a-z] doesn't match 'X' (case-sensitive)
 	{"testxyz", "TEST[a-z]*", true},  // Pattern matching is case-insensitive, [a-z] matches 'x'
 
+	// Unicode and emoji test cases - important for rune matching
+	{"café", "café", true},
+	{"café", "caf?", true}, // ? matches 'é'
+	{"café", "ca*", true},
+	{"café", "c.f.", true},
+	{"🌟", "🌟", true},
+	{"🌟", "?", true},
+	{"🌟", "*", true},
+	{"🌟", ".", true},
+	{"🌟hello", "?hello", true},
+	{"🌟hello", "*hello", true},
+	{"🌟hello", ".hello", true},
+
+	// Complex Unicode sequences
+	{"🌅☕️📰", "🌅☕️📰", true},
+	{"🌅☕️📰", "🌅*", true},
+	{"🌅☕️📰", "*📰", true},
+	{"🌅☕️📰", "?☕️?", true},
+	{"🌅☕️📰", "....", true}, // 4 Unicode characters should need 4 dots
+
+	{"match an emoji 😃", "match an emoji ?", true},
+	{"match an emoji 😃", "match * emoji ?", true},
+	{"do not match because of different emoji 😃", "do not match because of different emoji 😄", false},
+
+	// --- Unicode characters mixed with wildcards ---
+	{"café", "caf?", true}, // ? matches 'é'
+	{"café", "caf.", true},
+	{"café", "c.f.", true},
+	{"你好世界", "你好*", true},
+	{"你好世界", "你好.界", true},
+	{"你好世界", "你好?界", true}, // ? matches '世'
+	{"你好世界", "*世界", true},
+	{"你好世界X", "你好世界?", true}, // ? matches 'X'
+	{"你好世界", "你好世界?", true},  // 你好世界? can match: 你好世界 matches '你好世界', ? matches zero
+	{"你好世界", "你好世界.", false},
+
 	// Edge cases
 	{"Test", "test", true},
 	{"TEST", "test", true},
@@ -390,7 +392,7 @@ var caseFoldCases = []struct {
 // it supports '*', '?' and '.' wildcards with various test cases.
 func TestMatch(t *testing.T) {
 	for i, c := range baseTestCases {
-		result, err := MatchInternal(c.pattern, c.s, false)
+		result, err := MatchInternal(c.pattern, c.s)
 		if err != nil {
 			t.Errorf("Test %d: Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
 			continue
@@ -414,7 +416,7 @@ func TestMatchErrors(t *testing.T) {
 	}
 
 	for i, c := range cases {
-		_, err := MatchInternal(c.pattern, c.s, false)
+		_, err := MatchInternal(c.pattern, c.s)
 		if err == nil {
 			t.Errorf("Test %d: Expected error for pattern '%s', but got none. %s", i+1, c.pattern, c.desc)
 		}
@@ -430,7 +432,7 @@ func TestMatchFromByte(t *testing.T) {
 		patternBytes := []byte(c.pattern)
 		sBytes := []byte(c.s)
 
-		result, err := MatchInternal(patternBytes, sBytes, false)
+		result, err := MatchInternal(patternBytes, sBytes)
 		if err != nil {
 			t.Errorf("Test %d: Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
 			continue
@@ -481,6 +483,12 @@ func TestMatchEdgeCases(t *testing.T) {
 
 		// Mixed wildcard stress test
 		{"complex_test_string_123", "*test*string*[0-9]*", true, "mixed wildcards stress test"},
+
+		// Repeated patterns
+		{"abababab", "(ab)*", false, "parentheses are not supported, should not match"},
+		{"abababab", "ab*ab*ab*", true, "repeated ab with *"},
+
+		// Empty string with complex patterns
 		{"", "*?*?*?*", true, "empty string can match *?*?*?* (all zeros)"},
 		{"abcd", "*?*?*?*", true, "four chars can match *?*?*?* pattern"},
 
@@ -489,7 +497,7 @@ func TestMatchEdgeCases(t *testing.T) {
 	}
 
 	for i, c := range cases {
-		result, err := MatchInternal(c.pattern, c.s, false)
+		result, err := MatchInternal(c.pattern, c.s)
 		if err != nil {
 			t.Errorf("Test %d (%s): Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, c.desc, err, c.pattern, c.s)
 			continue
@@ -520,7 +528,7 @@ func FuzzMatchM(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, pattern string) {
 		// Test 1: Self-matching (original test)
-		matched, err := MatchInternal(pattern, pattern, false)
+		matched, err := MatchInternal(pattern, pattern)
 		if err != nil {
 			// Some strings are not valid patterns (e.g., trailing backslash)
 			// Skip these cases as they're expected to fail
@@ -539,7 +547,7 @@ func FuzzMatchM(f *testing.F) {
 				// * should match any string
 				testStrings := []string{"", "hello", "test123", "🌟"}
 				for _, s := range testStrings {
-					if matched, err := MatchInternal(pattern, s, false); err != nil || !matched {
+					if matched, err := MatchInternal(pattern, s); err != nil || !matched {
 						t.Errorf("Pattern '*' should match %q, got %v, err: %v", s, matched, err)
 					}
 				}
@@ -548,10 +556,10 @@ func FuzzMatchM(f *testing.F) {
 			// Test question mark behavior
 			if pattern == "?" {
 				// ? should match any single character
-				if matched, err := MatchInternal(pattern, "a", false); err != nil || !matched {
+				if matched, err := MatchInternal(pattern, "a"); err != nil || !matched {
 					t.Errorf("Pattern '?' should match single char 'a', got %v, err: %v", matched, err)
 				}
-				if matched, err := MatchInternal(pattern, "ab", false); err != nil || matched {
+				if matched, err := MatchInternal(pattern, "ab"); err != nil || matched {
 					t.Errorf("Pattern '?' should not match 'ab', got %v, err: %v", matched, err)
 				}
 			}
@@ -559,13 +567,13 @@ func FuzzMatchM(f *testing.F) {
 			// Test dot wildcard (any character except newline)
 			if pattern == "." {
 				// . should match any character except newline
-				if matched, err := MatchInternal(pattern, "a", false); err != nil || !matched {
+				if matched, err := MatchInternal(pattern, "a"); err != nil || !matched {
 					t.Errorf("Pattern '.' should match 'a', got %v, err: %v", matched, err)
 				}
-				if matched, err := MatchInternal(pattern, " ", false); err != nil || !matched {
+				if matched, err := MatchInternal(pattern, " "); err != nil || !matched {
 					t.Errorf("Pattern '.' should match space, got %v, err: %v", matched, err)
 				}
-				if matched, err := MatchInternal(pattern, "\n", false); err != nil || matched {
+				if matched, err := MatchInternal(pattern, "\n"); err != nil || matched {
 					t.Errorf("Pattern '.' should not match newline, got %v, err: %v", matched, err)
 				}
 			}
@@ -580,13 +588,14 @@ func FuzzMatchM(f *testing.F) {
 			testBytes := []byte(testString)
 			testRunes := []rune(testString)
 
-			stringResult, stringErr := MatchInternal(pattern, testString, false)
-			byteResult, byteErr := MatchInternal(patternBytes, testBytes, false)
-			runeResult, runeErr := MatchInternal(string(patternRunes), string(testRunes), false)
+			stringResult, stringErr := MatchInternal(pattern, testString)
+			byteResult, byteErr := MatchInternal(patternBytes, testBytes)
+			// For Unicode-aware testing, use MatchInternalFold since MatchInternal is ASCII-only
+			runeResult, _ := MatchInternalFold(string(patternRunes), string(testRunes), false)
 
-			if (stringErr == nil) != (byteErr == nil) || (stringErr == nil) != (runeErr == nil) {
-				t.Errorf("Error consistency failed for pattern %q: string err=%v, byte err=%v, rune err=%v",
-					pattern, stringErr, byteErr, runeErr)
+			if (stringErr == nil) != (byteErr == nil) {
+				t.Errorf("Error consistency failed for pattern %q: string err=%v, byte err=%v",
+					pattern, stringErr, byteErr)
 			}
 
 			if stringErr == nil && stringResult != byteResult {
@@ -594,9 +603,12 @@ func FuzzMatchM(f *testing.F) {
 					pattern, stringResult, byteResult)
 			}
 
-			if stringErr == nil && stringResult != runeResult {
-				t.Errorf("String/rune result mismatch for pattern %q: string=%v, rune=%v",
-					pattern, stringResult, runeResult)
+			// Only compare rune results if pattern is valid UTF-8
+			if len([]rune(pattern)) == len(pattern) {
+				if stringErr == nil && stringResult != runeResult {
+					t.Errorf("String/rune result mismatch for pattern %q: string=%v, rune=%v",
+						pattern, stringResult, runeResult)
+				}
 			}
 		}
 	})
@@ -614,7 +626,7 @@ func FuzzMatchFromByte(f *testing.F) {
 		b := []byte(s)
 
 		// Test 1: Self-matching
-		matched, err := MatchInternal(b, b, false)
+		matched, err := MatchInternal(b, b)
 		if err != nil {
 			// Skip invalid patterns
 			t.Skipf("Invalid pattern %q: %v", s, err)
@@ -627,7 +639,7 @@ func FuzzMatchFromByte(f *testing.F) {
 
 		// Test 2: Consistency with string version
 		if len(s) > 0 && !strings.ContainsAny(s, "\\") {
-			stringMatched, stringErr := MatchInternal(s, s, false)
+			stringMatched, stringErr := MatchInternal(s, s)
 			if (err == nil) != (stringErr == nil) {
 				t.Errorf("Error consistency failed between byte and string for %q", s)
 			}
@@ -641,7 +653,7 @@ func FuzzMatchFromByte(f *testing.F) {
 			// Test that * matches various byte sequences
 			testCases := [][]byte{nil, {}, []byte("hello"), {0, 1, 2, 255}}
 			for _, testBytes := range testCases {
-				if matched, err := MatchInternal(b, testBytes, false); err != nil || !matched {
+				if matched, err := MatchInternal(b, testBytes); err != nil || !matched {
 					t.Errorf("Pattern '*' should match byte sequence %v, got %v, err: %v", testBytes, matched, err)
 				}
 			}
@@ -662,7 +674,7 @@ func FuzzMatchByRune(f *testing.F) {
 		runes := []rune(s)
 
 		// Test 1: Self-matching
-		matched, err := MatchInternal(s, s, false)
+		matched, err := MatchInternalFold(s, s, false)
 		if err != nil {
 			// Skip invalid patterns
 			t.Skipf("Invalid pattern %q: %v", s, err)
@@ -679,19 +691,19 @@ func FuzzMatchByRune(f *testing.F) {
 			for i, r := range runes {
 				if r != '*' && r != '?' && r != '.' && r != '[' && r != '\\' {
 					// Non-wildcard character should match itself with ?
-					if matched, err := MatchInternal("?", string(r), false); err != nil || !matched {
+					if matched, err := MatchInternalFold("?", string(r), false); err != nil || !matched {
 						t.Errorf("Pattern '?' should match rune %q at position %d, got %v, err: %v",
 							string(r), i, matched, err)
 					}
 
 					// Test . wildcard with Unicode characters (only exclude newlines)
 					if r == '\n' { // Only newline should not match
-						if matched, err := MatchInternal(".", string(r), false); err != nil || matched {
+						if matched, err := MatchInternalFold(".", string(r), false); err != nil || matched {
 							t.Errorf("Pattern '.' should not match newline rune %q, got %v, err: %v",
 								string(r), matched, err)
 						}
 					} else {
-						if matched, err := MatchInternal(".", string(r), false); err != nil || !matched {
+						if matched, err := MatchInternalFold(".", string(r), false); err != nil || !matched {
 							t.Errorf("Pattern '.' should match rune %q, got %v, err: %v",
 								string(r), matched, err)
 						}
@@ -702,7 +714,7 @@ func FuzzMatchByRune(f *testing.F) {
 
 		// Test 3: Consistency with string version for valid UTF-8
 		if len(s) > 0 && !strings.ContainsAny(s, "\\") && len([]rune(s)) == len(runes) {
-			stringMatched, stringErr := MatchInternal(s, s, false)
+			stringMatched, stringErr := MatchInternalFold(s, s, false)
 			if (err == nil) != (stringErr == nil) {
 				t.Errorf("Error consistency failed between rune and string for %q", s)
 			}
@@ -725,7 +737,7 @@ func FuzzMatchNegative(f *testing.F) {
 	f.Add("[!xyz]", "x")
 
 	f.Fuzz(func(t *testing.T, pattern, input string) {
-		matched, err := MatchInternal(pattern, input, false)
+		matched, err := MatchInternal(pattern, input)
 
 		if err != nil {
 			// Skip invalid patterns
@@ -790,7 +802,7 @@ func FuzzMatchEdgeCases(f *testing.F) {
 		inputs := []string{"", "a", "test", " ", "\t", "\n", "unicode测试", "🌟"}
 
 		for _, input := range inputs {
-			matched, err := MatchInternal(pattern, input, false)
+			matched, err := MatchInternal(pattern, input)
 
 			// Test error handling consistency
 			if err != nil {
@@ -818,7 +830,7 @@ func FuzzMatchEdgeCases(f *testing.F) {
 			// Test consecutive wildcard handling
 			if strings.Contains(pattern, "***") {
 				starPattern := strings.ReplaceAll(pattern, "***", "*")
-				starMatched, starErr := MatchInternal(starPattern, input, false)
+				starMatched, starErr := MatchInternal(starPattern, input)
 				if starErr == nil && matched != starMatched {
 					t.Errorf("Pattern %q and simplified %q should have same result for %q: %v vs %v",
 						pattern, starPattern, input, matched, starMatched)
@@ -829,7 +841,7 @@ func FuzzMatchEdgeCases(f *testing.F) {
 			if strings.Contains(input, "测试") || strings.Contains(input, "🌟") {
 				// Verify that byte and rune versions handle Unicode consistently
 				if !strings.ContainsAny(pattern, "\\") {
-					runeMatched, runeErr := MatchInternal(pattern, input, false)
+					runeMatched, runeErr := MatchInternal(pattern, input)
 					if (err == nil) != (runeErr == nil) {
 						t.Errorf("Unicode consistency: pattern %q, input %q - string err=%v, rune err=%v",
 							pattern, input, err, runeErr)
@@ -848,7 +860,7 @@ func FuzzMatchEdgeCases(f *testing.F) {
 func TestMatchFoldString(t *testing.T) {
 	// Test 1: First run all baseTestCases - they should work the same in case-insensitive mode
 	for i, c := range baseTestCases {
-		result, err := MatchInternal(c.pattern, c.s, true)
+		result, err := MatchInternalFold(c.pattern, c.s, true)
 		if err != nil {
 			t.Errorf("Test %d (base): Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
 			continue
@@ -861,7 +873,7 @@ func TestMatchFoldString(t *testing.T) {
 	// Test 2: Case-insensitive specific test cases using global caseFoldCases
 
 	for i, c := range caseFoldCases {
-		result, err := MatchInternal(c.pattern, c.s, true)
+		result, err := MatchInternalFold(c.pattern, c.s, true)
 		if err != nil {
 			t.Errorf("CaseFold Test %d: Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
 			continue
@@ -879,7 +891,7 @@ func TestMatchFoldByte(t *testing.T) {
 		patternBytes := []byte(c.pattern)
 		sBytes := []byte(c.s)
 
-		result, err := MatchInternal(patternBytes, sBytes, true)
+		result, err := MatchInternalFold(patternBytes, sBytes, true)
 		if err != nil {
 			t.Errorf("Test %d (base): Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
 			continue
@@ -895,7 +907,7 @@ func TestMatchFoldByte(t *testing.T) {
 		patternBytes := []byte(c.pattern)
 		sBytes := []byte(c.s)
 
-		result, err := MatchInternal(patternBytes, sBytes, true)
+		result, err := MatchInternalFold(patternBytes, sBytes, true)
 		if err != nil {
 			t.Errorf("CaseFold Test %d: Unexpected error: %v; With Pattern: `%s` and String: `%s`", i+1, err, c.pattern, c.s)
 			continue
@@ -921,7 +933,7 @@ func FuzzMatchFold(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, pattern string) {
 		// Test 1: Self-matching (case-insensitive)
-		matched, err := MatchInternal(pattern, pattern, true)
+		matched, err := MatchInternalFold(pattern, pattern, true)
 		if err != nil {
 			t.Skipf("Invalid pattern %q: %v", pattern, err)
 		}
@@ -940,10 +952,10 @@ func FuzzMatchFold(f *testing.F) {
 
 			// Pattern should match both upper and lower case versions of itself
 			if !strings.ContainsAny(pattern, "\\[") { // Skip complex patterns for this test
-				if matched, err := MatchInternal(pattern, upperPattern, true); err == nil && !matched {
+				if matched, err := MatchInternalFold(pattern, upperPattern, true); err == nil && !matched {
 					t.Errorf("Pattern %q should match its uppercase version %q", pattern, upperPattern)
 				}
-				if matched, err := MatchInternal(pattern, lowerPattern, true); err == nil && !matched {
+				if matched, err := MatchInternalFold(pattern, lowerPattern, true); err == nil && !matched {
 					t.Errorf("Pattern %q should match its lowercase version %q", pattern, lowerPattern)
 				}
 			}
@@ -952,7 +964,7 @@ func FuzzMatchFold(f *testing.F) {
 			if pattern == "*" {
 				testStrings := []string{"", "HELLO", "hello", "Hello", "测试", "ТЕСТ"}
 				for _, s := range testStrings {
-					if matched, err := MatchInternal(pattern, s, true); err != nil || !matched {
+					if matched, err := MatchInternalFold(pattern, s, true); err != nil || !matched {
 						t.Errorf("Pattern '*' should match %q case-insensitively, got %v, err: %v", s, matched, err)
 					}
 				}
@@ -961,10 +973,10 @@ func FuzzMatchFold(f *testing.F) {
 			// Test question mark behavior case-insensitively
 			if pattern == "?" {
 				// ? should match any single character case-insensitively
-				if matched, err := MatchInternal(pattern, "A", true); err != nil || !matched {
+				if matched, err := MatchInternalFold(pattern, "A", true); err != nil || !matched {
 					t.Errorf("Pattern '?' should match single char 'A', got %v, err: %v", matched, err)
 				}
-				if matched, err := MatchInternal(pattern, "Ab", true); err != nil || matched {
+				if matched, err := MatchInternalFold(pattern, "Ab", true); err != nil || matched {
 					t.Errorf("Pattern '?' should not match 'Ab', got %v, err: %v", matched, err)
 				}
 			}
@@ -972,13 +984,13 @@ func FuzzMatchFold(f *testing.F) {
 			// Test dot wildcard (any character except newline) case-insensitively
 			if pattern == "." {
 				// . should match any character except newline case-insensitively
-				if matched, err := MatchInternal(pattern, "A", true); err != nil || !matched {
+				if matched, err := MatchInternalFold(pattern, "A", true); err != nil || !matched {
 					t.Errorf("Pattern '.' should match 'A', got %v, err: %v", matched, err)
 				}
-				if matched, err := MatchInternal(pattern, " ", true); err != nil || !matched {
+				if matched, err := MatchInternalFold(pattern, " ", true); err != nil || !matched {
 					t.Errorf("Pattern '.' should match space, got %v, err: %v", matched, err)
 				}
-				if matched, err := MatchInternal(pattern, "\n", true); err != nil || matched {
+				if matched, err := MatchInternalFold(pattern, "\n", true); err != nil || matched {
 					t.Errorf("Pattern '.' should not match newline, got %v, err: %v", matched, err)
 				}
 			}
@@ -991,8 +1003,8 @@ func FuzzMatchFold(f *testing.F) {
 			testString := "TEST"
 			testBytes := []byte(testString)
 
-			stringResult, stringErr := MatchInternal(pattern, testString, true)
-			byteResult, byteErr := MatchInternal(patternBytes, testBytes, true)
+			stringResult, stringErr := MatchInternalFold(pattern, testString, true)
+			byteResult, byteErr := MatchInternalFold(patternBytes, testBytes, true)
 
 			if (stringErr == nil) != (byteErr == nil) {
 				t.Errorf("Error consistency failed for pattern %q: string err=%v, byte err=%v",

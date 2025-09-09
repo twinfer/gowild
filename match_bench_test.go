@@ -87,6 +87,17 @@ func BenchmarkGoWild(b *testing.B) {
 	}
 }
 
+// BenchmarkGoWildFold tests gowild MatchFold (Unicode case-insensitive) performance
+func BenchmarkGoWildFold(b *testing.B) {
+	for _, tc := range commonTestCases {
+		b.Run(tc.name, func(b *testing.B) {
+			for b.Loop() {
+				MatchFold(tc.pattern, tc.text) // Ignoring error for benchmark
+			}
+		})
+	}
+}
+
 // BenchmarkFilepath tests path/filepath.Match performance on common patterns
 func BenchmarkFilepath(b *testing.B) {
 	for _, tc := range commonTestCases {

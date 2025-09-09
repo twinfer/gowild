@@ -13,6 +13,145 @@ import (
 	"testing"
 )
 
+// Test ASCII-only character class parsing for performance-optimized matching
+func TestASCIICharClassParsing(t *testing.T) {
+	tests := []struct {
+		pattern  string
+		pos      int
+		expected string
+		negated  bool
+		chars    []byte
+		ranges   int // number of ranges expected
+	}{
+		{"[abc]", 0, "[abc]", false, []byte{'a', 'b', 'c'}, 0},
+		{"[!abc]", 0, "[!abc]", true, []byte{'a', 'b', 'c'}, 0},
+		{"[^abc]", 0, "[^abc]", true, []byte{'a', 'b', 'c'}, 0},
+		{"[a-z]", 0, "[a-z]", false, []byte{}, 1},
+		{"[A-Z]", 0, "[A-Z]", false, []byte{}, 1},
+		{"[0-9]", 0, "[0-9]", false, []byte{}, 1},
+		{"[a-zA-Z0-9]", 0, "[a-zA-Z0-9]", false, []byte{}, 3},
+		{"[!a-z]", 0, "[!a-z]", true, []byte{}, 1},
+		{"[a-z0-9]", 0, "[a-z0-9]", false, []byte{}, 2},
+		{"[abc123]", 0, "[abc123]", false, []byte{'a', 'b', 'c', '1', '2', '3'}, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			cc, newPos, err := NewCharClass(tt.pattern, tt.pos)
+			if err != nil {
+				t.Fatalf("NewCharClass failed: %v", err)
+			}
+
+			if cc.Negated != tt.negated {
+				t.Errorf("Expected negated=%v, got %v", tt.negated, cc.Negated)
+			}
+
+			if len(cc.Chars) != len(tt.chars) {
+				t.Errorf("Expected %d chars, got %d", len(tt.chars), len(cc.Chars))
+			}
+
+			// Check individual characters
+			for i, expectedChar := range tt.chars {
+				if i < len(cc.Chars) && cc.Chars[i] != expectedChar {
+					t.Errorf("Expected char %c at position %d, got %c", expectedChar, i, cc.Chars[i])
+				}
+			}
+
+			if len(cc.Ranges) != tt.ranges {
+				t.Errorf("Expected %d ranges, got %d", tt.ranges, len(cc.Ranges))
+			}
+
+			if newPos != len(tt.pattern) {
+				t.Errorf("Expected position %d, got %d", len(tt.pattern), newPos)
+			}
+		})
+	}
+}
+
+func TestASCIICharClassMatching(t *testing.T) {
+	tests := []struct {
+		pattern string
+		char    byte
+		match   bool
+	}{
+		{"[abc]", 'a', true},
+		{"[abc]", 'b', true},
+		{"[abc]", 'c', true},
+		{"[abc]", 'd', false},
+		{"[!abc]", 'a', false},
+		{"[!abc]", 'd', true},
+		{"[^abc]", 'a', false},
+		{"[^abc]", 'd', true},
+		{"[a-z]", 'a', true},
+		{"[a-z]", 'm', true},
+		{"[a-z]", 'z', true},
+		{"[a-z]", 'A', false}, // ASCII-only, case-sensitive
+		{"[A-Z]", 'A', true},
+		{"[A-Z]", 'M', true},
+		{"[A-Z]", 'Z', true},
+		{"[A-Z]", 'a', false}, // ASCII-only, case-sensitive
+		{"[0-9]", '0', true},
+		{"[0-9]", '5', true},
+		{"[0-9]", '9', true},
+		{"[0-9]", 'a', false},
+		{"[0-9a-f]", '5', true},
+		{"[0-9a-f]", 'b', true},
+		{"[0-9a-f]", 'g', false},
+		{"[!0-9]", '5', false},
+		{"[!0-9]", 'a', true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern, func(t *testing.T) {
+			cc, _, err := NewCharClass(tt.pattern, 0)
+			if err != nil {
+				t.Fatalf("NewCharClass failed: %v", err)
+			}
+
+			result := cc.matches(tt.char)
+			if result != tt.match {
+				t.Errorf("Expected %v for char '%c' in pattern %s, got %v",
+					tt.match, tt.char, tt.pattern, result)
+			}
+		})
+	}
+}
+
+func TestASCIICharClassErrorCases(t *testing.T) {
+	tests := []struct {
+		pattern     string
+		description string
+	}{
+		{"[abc", "unclosed character class"},
+		{"[a-z", "unclosed character class with range"},
+		{"[!abc", "unclosed negated character class"},
+		{"[^abc", "unclosed negated character class with ^"},
+		{"[z-a]", "invalid range (z > a)"},
+		{"[9-0]", "invalid numeric range (9 > 0)"},
+		{"[0-", "incomplete range"},
+		{"[\\", "incomplete escape sequence"},
+		{"[a-\\", "incomplete escape in range"},
+		{"[", "empty character class start"},
+		{"[]", "empty character class"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.description, func(t *testing.T) {
+			// Test with string
+			_, _, err := NewCharClass(tt.pattern, 0)
+			if err == nil {
+				t.Errorf("Expected error for pattern %q (%s), got nil", tt.pattern, tt.description)
+			}
+
+			// Test with []byte to ensure consistency
+			_, _, err = NewCharClass([]byte(tt.pattern), 0)
+			if err == nil {
+				t.Errorf("Expected error for []byte pattern %q (%s), got nil", tt.pattern, tt.description)
+			}
+		})
+	}
+}
+
 func TestCharClassParsing(t *testing.T) {
 	tests := []struct {
 		pattern  string
@@ -76,7 +215,7 @@ func TestCharClassMatching(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.pattern, func(t *testing.T) {
-			cc, _, err := NewCharClass(tt.pattern, 0)
+			cc, _, err := NewcharClassFold(tt.pattern, 0)
 			if err != nil {
 				t.Fatalf("NewCharClass failed: %v", err)
 			}
@@ -106,7 +245,7 @@ func TestCharClassAlwaysCaseSensitive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.pattern, func(t *testing.T) {
-			cc, _, err := NewCharClass(tt.pattern, 0)
+			cc, _, err := NewcharClassFold(tt.pattern, 0)
 			if err != nil {
 				t.Fatalf("NewCharClass failed: %v", err)
 			}
